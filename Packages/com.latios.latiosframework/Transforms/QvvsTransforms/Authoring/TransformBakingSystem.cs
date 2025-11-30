@@ -1,14 +1,15 @@
 #if !LATIOS_TRANSFORMS_UNCACHED_QVVS && !LATIOS_TRANSFORMS_UNITY
+using System;
 using System.Collections.Generic;
 using Latios.Authoring;
+using static Unity.Entities.SystemAPI;
 using Unity.Burst;
 using Unity.Burst.Intrinsics;
 using Unity.Collections;
+using Unity.Collections.LowLevel.Unsafe;
 using Unity.Entities;
 using Unity.Jobs;
 using Unity.Mathematics;
-
-using static Unity.Entities.SystemAPI;
 
 namespace Latios.Transforms.Authoring.Systems
 {
@@ -18,82 +19,304 @@ namespace Latios.Transforms.Authoring.Systems
     [BurstCompile]
     public partial struct TransformBakingSystem : ISystem
     {
+        [BakingType] struct TrackedTag : ICleanupComponentData { }
+
         EntityQuery m_query;
+        EntityQuery m_newQuery;
+        EntityQuery m_deadQuery;
+
+        Hierarchy m_hierarchy;
 
         public void OnCreate(ref SystemState state)
         {
-            m_query = state.Fluent().With<TransformAuthoring>(true).IncludeDisabledEntities().IncludePrefabs().Build();
+            m_query    = state.Fluent().With<TransformAuthoring>(true).IncludeDisabledEntities().IncludePrefabs().Build();
+            m_newQuery = state.Fluent().With<TransformAuthoring>(true).Without<TrackedTag>().IncludeDisabledEntities().IncludePrefabs().Build();
+            m_newQuery = state.Fluent().With<TrackedTag>(true).Without<TransformAuthoring>().IncludeDisabledEntities().IncludePrefabs().Build();
+
+            m_hierarchy = new Hierarchy(256, Allocator.Persistent);
         }
 
-        [BurstCompile]
         public void OnDestroy(ref SystemState state)
         {
+            m_hierarchy.Dispose();
         }
 
         [BurstCompile]
         public void OnUpdate(ref SystemState state)
         {
-            var ecb = new EntityCommandBuffer(state.WorldUpdateAllocator);
+            var entityCount   = m_query.CalculateEntityCountWithoutFiltering();
+            var dirtyRootsSet = new NativeHashSet<Entity>(entityCount, state.WorldUpdateAllocator);
 
-            var job = new Job
+            var createDestroyJh = new CreateDestroyJob
             {
-                ecb                          = ecb.AsParallelWriter(),
-                entityHandle                 = GetEntityTypeHandle(),
-                lastSystemVersion            = state.LastSystemVersion,
-                localTransformHandle         = GetComponentTypeHandle<LocalTransform>(false),
-                parentHandle                 = GetComponentTypeHandle<Parent>(false),
-                parentToWorldTransformHandle = GetComponentTypeHandle<ParentToWorldTransform>(false),
-                transformAuthoringHandle     = GetComponentTypeHandle<TransformAuthoring>(true),
-                transformAuthoringLookup     = GetComponentLookup<TransformAuthoring>(true),
-                worldTransformHandle         = GetComponentTypeHandle<WorldTransform>(false),
-            };
+                newEntities  = m_newQuery.ToEntityArray(state.WorldUpdateAllocator),
+                deadEntities = m_deadQuery.ToEntityArray(state.WorldUpdateAllocator),
+                dirtyRoots   = dirtyRootsSet,
+                hierarchy    = m_hierarchy,
+            }.Schedule(default);
 
-            state.Dependency = job.ScheduleParallelByRef(m_query, state.Dependency);
-            state.CompleteDependency();
+            state.EntityManager.RemoveComponent<TrackedTag>(m_deadQuery);
+            state.EntityManager.AddComponent<TrackedTag>(m_newQuery);
 
+            var ecb                           = new EntityCommandBuffer(state.WorldUpdateAllocator);
+            var entityInHierarchyChangeStream = new NativeStream(m_query.CalculateChunkCountWithoutFiltering(), state.WorldUpdateAllocator);
+
+            var classifyJh = new ClassifyJob
+            {
+                hierarchy                   = m_hierarchy,
+                entityHandle                = GetEntityTypeHandle(),
+                transformAuthoringHandle    = GetComponentTypeHandle<TransformAuthoring>(true),
+                transformAuthoringLookup    = GetComponentLookup<TransformAuthoring>(true),
+                rootReferenceHandle         = GetComponentTypeHandle<RootReference>(true),
+                authoringSiblingIndexHandle = GetComponentTypeHandle<AuthoringSiblingIndex>(true),
+                staticHandle                = GetComponentTypeHandle<Unity.Transforms.Static>(true),
+                worldTransformHandle        = GetComponentTypeHandle<WorldTransform>(false),
+                entityHierarchyChangeStream = entityInHierarchyChangeStream.AsWriter(),
+                ecb                         = ecb.AsParallelWriter(),
+                lastSystemVersion           = state.LastSystemVersion,
+            }.ScheduleParallel(m_query, JobHandle.CombineDependencies(state.Dependency, createDestroyJh));
+
+            var dirtyRootsList           = new NativeList<Entity>(state.WorldUpdateAllocator);
+            var dirtyRootHasChildrenList = new NativeBitArray(1, state.WorldUpdateAllocator, NativeArrayOptions.UninitializedMemory);
+
+            var applyHierarchyChangesJh = new ApplyHierarchyChangesJob
+            {
+                entityHierarchyChangeStream = entityInHierarchyChangeStream.AsReader(),
+                hierarchy                   = m_hierarchy,
+                dirtyRootsSet               = dirtyRootsSet,
+                dirtyRootHasChildrenList    = dirtyRootHasChildrenList,
+                dirtyRootsList              = dirtyRootsList,
+            }.Schedule(classifyJh);
+
+            classifyJh.Complete();
             ecb.Playback(state.EntityManager);
+            applyHierarchyChangesJh.Complete();
+
+            for (int i = 0; i < dirtyRootsList.Length; i++)
+            {
+                var root  = dirtyRootsList[i];
+                var has   = state.EntityManager.HasBuffer<EntityInHierarchy>(root);
+                var needs = dirtyRootHasChildrenList.IsSet(i);
+                if (has && !needs)
+                    state.EntityManager.RemoveComponent<EntityInHierarchy>(root);
+                else if (!has && needs)
+                    state.EntityManager.AddBuffer<EntityInHierarchy>(root);
+            }
+
+            state.Dependency = new RebuildHierarchiesJob
+            {
+                hierarchy                = m_hierarchy,
+                dirtyRoots               = dirtyRootsList.AsArray(),
+                transformAuthoringLookup = GetComponentLookup<TransformAuthoring>(true),
+                worldTransformLookup     = GetComponentLookup<WorldTransform>(false),
+                rootReferenceLookup      = GetComponentLookup<RootReference>(false),
+                entityInHierarchyLookup  = GetBufferLookup<EntityInHierarchy>(false),
+            }.ScheduleParallel(dirtyRootsList.Length, 1, default);
+        }
+
+        struct Hierarchy
+        {
+            struct Node
+            {
+                public Entity             entity;
+                public Entity             parent;
+                public int                order;  // -1 = unordered.
+                public UnsafeList<Entity> children;
+            }
+
+            NativeHashMap<Entity, int> entityToNodeIndexMap;
+            NativeList<Node>           nodes;
+
+            public Hierarchy(int initialCapacity, AllocatorManager.AllocatorHandle allocator)
+            {
+                entityToNodeIndexMap = new NativeHashMap<Entity, int>(initialCapacity, allocator);
+                nodes                = new NativeList<Node>(initialCapacity, allocator);
+            }
+
+            public void Dispose()
+            {
+                foreach (var node in nodes)
+                {
+                    if (node.children.IsCreated)
+                        node.children.Dispose();
+                }
+                nodes.Dispose();
+                entityToNodeIndexMap.Dispose();
+            }
+
+            public void GetOrderAndParent(Entity entity, out int order, out Entity parent)
+            {
+                var node = nodes[entityToNodeIndexMap[entity]];
+                order    = node.order;
+                parent   = node.parent;
+            }
+
+            public void GetOrderAndChildren(Entity entity, out int order, out UnsafeList<Entity> children)
+            {
+                var node = nodes[entityToNodeIndexMap[entity]];
+                order    = node.order;
+                children = node.children;
+            }
+
+            public bool HasChildren(Entity entity)
+            {
+                var node = nodes[entityToNodeIndexMap[entity]];
+                return !node.children.IsEmpty;
+            }
+
+            public int GetDeterministicIndex(Entity entity) => entityToNodeIndexMap[entity];
+
+            public void Add(Entity entity)
+            {
+                var index                   = nodes.Length;
+                nodes.Add(new Node { entity = entity, order = -1 });
+                entityToNodeIndexMap.Add(entity, index);
+            }
+
+            public void Remove(Entity entity, ref NativeHashSet<Entity> dirtyRoots)
+            {
+                ref var node = ref nodes.ElementAt(entityToNodeIndexMap[entity]);
+                if (node.children.IsCreated)
+                {
+                    foreach (var child in node.children)
+                    {
+                        ChangeParent(entity, -1, Entity.Null, ref dirtyRoots);
+                    }
+                    node.children.Dispose();
+                }
+            }
+
+            public void ChangeOrder(Entity entity, int order, ref NativeHashSet<Entity> dirtyRoots)
+            {
+                ref var node = ref nodes.ElementAt(entityToNodeIndexMap[entity]);
+                node.order   = order;
+                if (node.parent != Entity.Null)
+                    FindAndDirtyRoot(node.parent, ref dirtyRoots);
+            }
+
+            public void ChangeParent(Entity entity, int order, Entity newParent, ref NativeHashSet<Entity> dirtyRoots)
+            {
+                ref var node = ref nodes.ElementAt(entityToNodeIndexMap[entity]);
+                if (node.parent != Entity.Null)
+                {
+                    FindAndDirtyRoot(node.parent, ref dirtyRoots);
+                    ref var previousParentNode = ref nodes.ElementAt(entityToNodeIndexMap[node.parent]);
+                    for (int i = 0; i < previousParentNode.children.Length; i++)
+                    {
+                        if (previousParentNode.children[i] == entity)
+                        {
+                            previousParentNode.children.RemoveAtSwapBack(i);
+                            break;
+                        }
+                    }
+                }
+                node.parent = newParent;
+                node.order  = order;
+                if (newParent != Entity.Null)
+                {
+                    FindAndDirtyRoot(newParent, ref dirtyRoots);
+                    ref var newParentNode = ref nodes.ElementAt(entityToNodeIndexMap[newParent]);
+                    if (!newParentNode.children.IsCreated)
+                        newParentNode.children = new UnsafeList<Entity>(8, Allocator.Persistent);
+                    newParentNode.children.Add(entity);
+                }
+                else
+                {
+                    dirtyRoots.Add(entity);
+                }
+            }
+
+            void FindAndDirtyRoot(Entity searchStart, ref NativeHashSet<Entity> dirtyRoots)
+            {
+                var search         = searchStart;
+                var previousSearch = search;
+                while (search != Entity.Null)
+                {
+                    previousSearch = search;
+                    search         = nodes[entityToNodeIndexMap[search]].parent;
+                }
+                dirtyRoots.Add(previousSearch);
+            }
+        }
+
+        struct EntityHierarchyChange
+        {
+            public Entity entity;
+            public Entity parent;
+            public int    order;
+            public bool   parentChanged;
         }
 
         [BurstCompile]
-        struct Job : IJobChunk
+        struct CreateDestroyJob : IJob
         {
-            [ReadOnly] public EntityTypeHandle                        entityHandle;
-            [ReadOnly] public ComponentTypeHandle<TransformAuthoring> transformAuthoringHandle;
-            [ReadOnly] public ComponentLookup<TransformAuthoring>     transformAuthoringLookup;
-            public ComponentTypeHandle<WorldTransform>                worldTransformHandle;
-            public ComponentTypeHandle<ParentToWorldTransform>        parentToWorldTransformHandle;
-            public ComponentTypeHandle<LocalTransform>                localTransformHandle;
-            public ComponentTypeHandle<Parent>                        parentHandle;
+            [ReadOnly] public NativeArray<Entity> newEntities;
+            [ReadOnly] public NativeArray<Entity> deadEntities;
+            public Hierarchy                      hierarchy;
+            public NativeHashSet<Entity>          dirtyRoots;
 
+            public void Execute()
+            {
+                foreach (var entity in deadEntities)
+                    hierarchy.Remove(entity, ref dirtyRoots);
+                foreach (var entity in newEntities)
+                    hierarchy.Add(entity);
+            }
+        }
+
+        [BurstCompile]
+        struct ClassifyJob : IJobChunk
+        {
+            [ReadOnly] public Hierarchy                                    hierarchy;
+            [ReadOnly] public EntityTypeHandle                             entityHandle;
+            [ReadOnly] public ComponentTypeHandle<TransformAuthoring>      transformAuthoringHandle;
+            [ReadOnly] public ComponentLookup<TransformAuthoring>          transformAuthoringLookup;
+            [ReadOnly] public ComponentTypeHandle<RootReference>           rootReferenceHandle;
+            [ReadOnly] public ComponentTypeHandle<AuthoringSiblingIndex>   authoringSiblingIndexHandle;
+            [ReadOnly] public ComponentTypeHandle<Unity.Transforms.Static> staticHandle;  // Despite the namespace, this is in Unity.Entities assembly
+            public ComponentTypeHandle<WorldTransform>                     worldTransformHandle;
+
+            public NativeStream.Writer                entityHierarchyChangeStream;
             public EntityCommandBuffer.ParallelWriter ecb;
             public uint                               lastSystemVersion;
 
             public void Execute(in ArchetypeChunk chunk, int unfilteredChunkIndex, bool useEnabledMask, in v128 chunkEnabledMask)
             {
-                if (!chunk.DidChange(ref transformAuthoringHandle, lastSystemVersion) && !chunk.DidOrderChange(lastSystemVersion))
+                if (!chunk.DidChange(ref transformAuthoringHandle,
+                                     lastSystemVersion) && !chunk.DidChange(ref authoringSiblingIndexHandle, lastSystemVersion) && !chunk.DidOrderChange(lastSystemVersion))
                     return;
 
-                bool hasWorldTransform         = chunk.Has(ref worldTransformHandle);
-                bool hasParent                 = chunk.Has(ref parentHandle);
-                bool hasParentToWorldTransform = chunk.Has(ref parentToWorldTransformHandle);
-                bool hasLocalTransform         = chunk.Has(ref localTransformHandle);
-                bool hasStatic                 = chunk.Has<Unity.Transforms.Static>();  // Despite the namespace, this is in Unity.Entities assembly
-                bool hasIdentityLocalToParent  = chunk.Has<CopyParentWorldTransformTag>();
+                entityHierarchyChangeStream.BeginForEachIndex(unfilteredChunkIndex);
 
-                var entities                = chunk.GetNativeArray(entityHandle);
-                var transformAuthoringArray = chunk.GetNativeArray(ref transformAuthoringHandle);
+                bool hasWorldTransform        = chunk.Has(ref worldTransformHandle);
+                bool hasRootReference         = chunk.Has(ref rootReferenceHandle);
+                bool hasAuthoringSiblingIndex = chunk.Has(ref authoringSiblingIndexHandle);
+                bool hasStatic                = chunk.Has(ref staticHandle);
 
-                var worldTransformArray         = chunk.GetNativeArray(ref worldTransformHandle);
-                var parentToWorldTransformArray = chunk.GetNativeArray(ref parentToWorldTransformHandle);
-                var localTransformArray         = chunk.GetNativeArray(ref localTransformHandle);
-                var parentArray                 = chunk.GetNativeArray(ref parentHandle);
+                var entities                   = chunk.GetNativeArray(entityHandle);
+                var transformAuthoringArray    = chunk.GetNativeArray(ref transformAuthoringHandle);
+                var rootReferenceArray         = chunk.GetNativeArray(ref rootReferenceHandle);
+                var authoringSiblingIndexArray = chunk.GetNativeArray(ref authoringSiblingIndexHandle);
+                var worldTransformArray        = chunk.GetNativeArray(ref worldTransformHandle);
 
                 for (int i = 0; i < chunk.Count; i++)
                 {
                     var transformAuthoring = transformAuthoringArray[i];
 
+                    // Todo: Similar to Unity Transforms baking, we don't properly remove components when switching to Manual Override.
                     if ((transformAuthoring.RuntimeTransformUsage & RuntimeTransformComponentFlags.ManualOverride) != 0)
                     {
+                        hierarchy.GetOrderAndParent(entities[i], out _, out Entity parent);
+                        if (parent != Entity.Null)
+                        {
+                            entityHierarchyChangeStream.Write(new EntityHierarchyChange
+                            {
+                                entity        = entities[i],
+                                parent        = Entity.Null,
+                                order         = -1,
+                                parentChanged = true
+                            });
+                        }
                         continue;
                     }
 
@@ -113,24 +336,42 @@ namespace Latios.Transforms.Authoring.Systems
                         needsLocalTransform = (transformAuthoring.RuntimeTransformUsage & RuntimeTransformComponentFlags.RequestParent) != 0;
                     }
 
-                    if (needsLocalTransform == false && needsWorldTransform == false &&
-                        (hasLocalTransform || hasParent || hasParentToWorldTransform || hasWorldTransform))
+                    if (needsLocalTransform == false && needsWorldTransform == false && hasWorldTransform)
                     {
                         var cts = new ComponentTypeSet(ComponentType.ReadOnly<WorldTransform>(),
-                                                       ComponentType.ReadOnly<LocalTransform>(),
-                                                       ComponentType.ReadOnly<ParentToWorldTransform>(),
-                                                       ComponentType.ReadOnly<Parent>());
+                                                       ComponentType.ReadOnly<RootReference>(),
+                                                       ComponentType.ReadOnly<EntityInHierarchy>());
                         ecb.RemoveComponent(unfilteredChunkIndex, entities[i], cts);
+
+                        hierarchy.GetOrderAndParent(entities[i], out _, out var parent);
+                        if (parent != Entity.Null)
+                        {
+                            entityHierarchyChangeStream.Write(new EntityHierarchyChange
+                            {
+                                entity        = entities[i],
+                                parent        = Entity.Null,
+                                order         = -1,
+                                parentChanged = true
+                            });
+                        }
                     }
 
                     if (needsWorldTransform == true && needsLocalTransform == false)
                     {
-                        if (hasLocalTransform || hasParent || hasParentToWorldTransform)
+                        if (hasRootReference)
                         {
-                            var cts = new ComponentTypeSet(ComponentType.ReadOnly<LocalTransform>(),
-                                                           ComponentType.ReadOnly<ParentToWorldTransform>(),
-                                                           ComponentType.ReadOnly<Parent>());
-                            ecb.RemoveComponent(unfilteredChunkIndex, entities[i], cts);
+                            ecb.RemoveComponent<RootReference>(unfilteredChunkIndex, entities[i]);
+                            hierarchy.GetOrderAndParent(entities[i], out _, out var parent);
+                            if (parent != Entity.Null)
+                            {
+                                entityHierarchyChangeStream.Write(new EntityHierarchyChange
+                                {
+                                    entity        = entities[i],
+                                    parent        = Entity.Null,
+                                    order         = -1,
+                                    parentChanged = true
+                                });
+                            }
                         }
 
                         TransformBakeUtils.GetScaleAndStretch(transformAuthoring.LocalScale, out var scale, out var stretch);
@@ -158,59 +399,26 @@ namespace Latios.Transforms.Authoring.Systems
                             ecb.AddComponent(unfilteredChunkIndex, entities[i], new WorldTransform { worldTransform = worldTransform });
                     }
 
-                    if (needsWorldTransform && needsLocalTransform && hasIdentityLocalToParent)
+                    if (needsWorldTransform && needsLocalTransform)
                     {
-                        var parentWorldTransform = GetWorldTransform(transformAuthoringLookup[transformAuthoring.RuntimeParent]);
-
-                        if (hasWorldTransform)
-                            worldTransformArray[i] = new WorldTransform { worldTransform = parentWorldTransform };
-                        else
-                            ecb.AddComponent(unfilteredChunkIndex, entities[i], new WorldTransform { worldTransform = parentWorldTransform });
-
-                        if (hasParent)
-                            parentArray[i] = new Parent { parent = transformAuthoring.RuntimeParent };
-                        else
-                            ecb.AddComponent(unfilteredChunkIndex, entities[i], new Parent { parent = transformAuthoring.RuntimeParent });
-
-                        if (hasParentToWorldTransform || hasLocalTransform)
-                            ecb.RemoveComponent(unfilteredChunkIndex, entities[i], new ComponentTypeSet(ComponentType.ReadOnly<ParentToWorldTransform>(),
-                                                                                                        ComponentType.ReadOnly<LocalTransform>()));
-                    }
-                    else if (needsWorldTransform && needsLocalTransform)
-                    {
-                        var parentWorldTransform = GetWorldTransform(transformAuthoringLookup[transformAuthoring.RuntimeParent]);
-                        TransformBakeUtils.GetScaleAndStretch(transformAuthoring.LocalScale, out var scale, out var stretch);
-                        var worldTransform = new TransformQvvs
+                        if (!hasWorldTransform || !hasRootReference)
                         {
-                            stretch = stretch,
-                        };
-                        var localTransform = new TransformQvs
+                            var cts = new ComponentTypeSet(ComponentType.ReadOnly<WorldTransform>(), ComponentType.ReadOnly<RootReference>());
+                            ecb.AddComponent(unfilteredChunkIndex, entities[i], cts);
+                        }
+                        hierarchy.GetOrderAndParent(entities[i], out var order, out var parent);
+                        var parentChanged = parent != transformAuthoring.RuntimeParent;
+                        var currentOrder  = hasAuthoringSiblingIndex ? authoringSiblingIndexArray[i].index : -1;
+                        if (parentChanged || order != currentOrder || ChangeVersionUtility.DidChange(transformAuthoring.ChangeVersion, lastSystemVersion))
                         {
-                            position = transformAuthoring.LocalPosition,
-                            rotation = transformAuthoring.LocalRotation,
-                            scale    = scale
-                        };
-                        qvvs.mul(ref worldTransform, parentWorldTransform, localTransform);
-
-                        if (hasWorldTransform)
-                            worldTransformArray[i] = new WorldTransform { worldTransform = worldTransform };
-                        else
-                            ecb.AddComponent(unfilteredChunkIndex, entities[i], new WorldTransform { worldTransform = worldTransform });
-
-                        if (hasParentToWorldTransform)
-                            parentToWorldTransformArray[i] = new ParentToWorldTransform { parentToWorldTransform = parentWorldTransform };
-                        else
-                            ecb.AddComponent(unfilteredChunkIndex, entities[i], new ParentToWorldTransform { parentToWorldTransform = parentWorldTransform });
-
-                        if (hasLocalTransform)
-                            localTransformArray[i] = new LocalTransform { localTransform = localTransform };
-                        else
-                            ecb.AddComponent(unfilteredChunkIndex, entities[i], new LocalTransform { localTransform = localTransform });
-
-                        if (hasParent)
-                            parentArray[i] = new Parent { parent = transformAuthoring.RuntimeParent };
-                        else
-                            ecb.AddComponent(unfilteredChunkIndex, entities[i], new Parent { parent = transformAuthoring.RuntimeParent });
+                            entityHierarchyChangeStream.Write(new EntityHierarchyChange
+                            {
+                                entity        = entities[i],
+                                parent        = transformAuthoring.RuntimeParent,
+                                order         = currentOrder,
+                                parentChanged = parentChanged
+                            });
+                        }
                     }
                 }
             }
@@ -249,6 +457,195 @@ namespace Latios.Transforms.Authoring.Systems
                     qvvs.mul(ref worldTransform, parentWorldTransform, localTransform);
                     return worldTransform;
                 }
+            }
+        }
+
+        [BurstCompile]
+        struct ApplyHierarchyChangesJob : IJob
+        {
+            [ReadOnly] public NativeStream.Reader entityHierarchyChangeStream;
+            public Hierarchy                      hierarchy;
+            public NativeHashSet<Entity>          dirtyRootsSet;
+            public NativeList<Entity>             dirtyRootsList;
+            public NativeBitArray                 dirtyRootHasChildrenList;
+
+            public void Execute()
+            {
+                var foreachCount = entityHierarchyChangeStream.ForEachCount;
+                for (int chunk = 0; chunk < foreachCount; chunk++)
+                {
+                    var elements = entityHierarchyChangeStream.BeginForEachIndex(chunk);
+                    for (int i = 0; i < elements; i++)
+                    {
+                        var change = entityHierarchyChangeStream.Read<EntityHierarchyChange>();
+                        if (change.parentChanged)
+                            hierarchy.ChangeParent(change.entity, change.order, change.parent, ref dirtyRootsSet);
+                        else
+                            hierarchy.ChangeOrder(change.entity, change.order, ref dirtyRootsSet); // Changing order will dirty the root even if the order didn't actually change
+                    }
+                    entityHierarchyChangeStream.EndForEachIndex();
+                }
+
+                var dirtyRootsToSort = new NativeArray<EntityAndNodeIndex>(dirtyRootsSet.Count, Allocator.Temp, NativeArrayOptions.UninitializedMemory);
+                {
+                    int i = 0;
+                    foreach (var root in dirtyRootsSet)
+                    {
+                        dirtyRootsToSort[i] = new EntityAndNodeIndex { entity = root, index = hierarchy.GetDeterministicIndex(root) };
+                        i++;
+                    }
+                }
+                dirtyRootsToSort.Sort();
+                dirtyRootsList.Capacity = dirtyRootsToSort.Length;
+                dirtyRootHasChildrenList.Resize(dirtyRootsToSort.Length, NativeArrayOptions.ClearMemory);
+                {
+                    int i = 0;
+                    foreach (var root in dirtyRootsToSort)
+                    {
+                        if (hierarchy.HasChildren(root.entity))
+                        {
+                            dirtyRootsList.Add(root.entity);
+                            dirtyRootHasChildrenList.Set(i, true);
+                        }
+                        i++;
+                    }
+                }
+            }
+
+            struct EntityAndNodeIndex : IComparable<EntityAndNodeIndex>
+            {
+                public Entity entity;
+                public int    index;
+
+                public int CompareTo(EntityAndNodeIndex other) => this.index.CompareTo(other.index);
+            }
+        }
+
+        [BurstCompile]
+        struct RebuildHierarchiesJob : IJobFor
+        {
+            [ReadOnly] public Hierarchy                                                  hierarchy;
+            [ReadOnly] public NativeArray<Entity>                                        dirtyRoots;
+            [ReadOnly] public ComponentLookup<TransformAuthoring>                        transformAuthoringLookup;
+            [NativeDisableParallelForRestriction] public ComponentLookup<WorldTransform> worldTransformLookup;
+            [NativeDisableParallelForRestriction] public ComponentLookup<RootReference>  rootReferenceLookup;
+            [NativeDisableParallelForRestriction] public BufferLookup<EntityInHierarchy> entityInHierarchyLookup;
+
+            UnsafeQueue<EnqueuedChild> queue;
+            UnsafeList<TransformQvvs>  computedTransforms;
+            UnsafeList<EnqueuedChild>  childrenToSort;
+
+            public void Execute(int index)
+            {
+                if (!queue.IsCreated)
+                {
+                    queue              = new UnsafeQueue<EnqueuedChild>(Allocator.Temp);
+                    computedTransforms = new UnsafeList<TransformQvvs>(32, Allocator.Temp);
+                    childrenToSort     = new UnsafeList<EnqueuedChild>(32, Allocator.Temp);
+                }
+                queue.Clear();
+                computedTransforms.Clear();
+
+                var root   = dirtyRoots[index];
+                var buffer = entityInHierarchyLookup[root];
+                buffer.Clear();
+                hierarchy.GetOrderAndChildren(root, out _, out var childrenOfRoot);
+                buffer.Add(new EntityInHierarchy
+                {
+                    m_childCount       = childrenOfRoot.Length,
+                    m_descendantEntity = root,
+                    m_parentIndex      = -1,
+                    m_firstChildIndex  = 1,
+                    m_flags            = default,
+                });
+                EnqueueChildren(childrenOfRoot, 0);
+                while (queue.TryDequeue(out var current))
+                {
+                    computedTransforms.Add(ComputeWorldTransform(current.child, buffer[current.parentIndex].entity, computedTransforms[current.parentIndex]));
+                    var thisIndex = buffer.Length;
+                    buffer.Add(new EntityInHierarchy
+                    {
+                        m_childCount       = current.children.Length,
+                        m_descendantEntity = current.child,
+                        m_parentIndex      = current.parentIndex,
+                        m_firstChildIndex  = -1,
+                        m_flags            = default,
+                    });
+                    ref var parentInHierarchy = ref buffer.ElementAt(current.parentIndex);
+                    if (parentInHierarchy.firstChildIndex < 0)
+                        parentInHierarchy.m_firstChildIndex = thisIndex;
+                    EnqueueChildren(current.children, thisIndex);
+                }
+
+                for (int i = 1; i < computedTransforms.Length; i++)
+                {
+                    var targetEntity                  = buffer[i].entity;
+                    rootReferenceLookup[targetEntity] = new RootReference
+                    {
+                        m_indexInHierarchy = i,
+                        m_rootEntity       = root
+                    };
+                    worldTransformLookup[targetEntity] = new WorldTransform { worldTransform = computedTransforms[i] };
+                }
+            }
+
+            void EnqueueChildren(UnsafeList<Entity> children, int parentIndex)
+            {
+                childrenToSort.Clear();
+                int nextUndefinedOrder = 0x08000000;
+                for (int i = 0; i < children.Length; i++)
+                {
+                    var child = children[i];
+                    hierarchy.GetOrderAndChildren(child, out var order, out var childrenOfChild);
+                    if (order < 0)
+                    {
+                        order = nextUndefinedOrder;
+                        nextUndefinedOrder++;
+                    }
+                    childrenToSort.Add(new EnqueuedChild
+                    {
+                        child       = child,
+                        parentIndex = parentIndex,
+                        order       = order,
+                        children    = childrenOfChild
+                    });
+                }
+                childrenToSort.Sort(new ChildSort());
+                foreach (var child in childrenToSort)
+                    queue.Enqueue(child);
+            }
+
+            TransformQvvs ComputeWorldTransform(Entity child, Entity parent, TransformQvvs parentTransform)
+            {
+                var transformAuthoring = transformAuthoringLookup[child];
+                TransformBakeUtils.GetScaleAndStretch(transformAuthoring.LocalScale, out var scale, out var stretch);
+                var workingTransform = new TransformQvvs(transformAuthoring.LocalPosition, transformAuthoring.LocalRotation, scale, stretch);
+                if (parent == transformAuthoring.AuthoringParent)
+                    return qvvs.mul(parentTransform, workingTransform);
+
+                var nextParent = transformAuthoring.AuthoringParent;
+                while (nextParent != parent)
+                {
+                    var intermediateAuthoring = transformAuthoringLookup[nextParent];
+                    TransformBakeUtils.GetScaleAndStretch(intermediateAuthoring.LocalScale, out var interScale, out var interStretch);
+                    var interTransform = new TransformQvvs(intermediateAuthoring.LocalPosition, intermediateAuthoring.LocalRotation, interScale, interStretch);
+                    workingTransform   = qvvs.mul(interTransform, workingTransform);
+                    nextParent         = transformAuthoring.AuthoringParent;
+                }
+                return qvvs.mul(parentTransform, workingTransform);
+            }
+
+            struct EnqueuedChild
+            {
+                public Entity             child;
+                public int                parentIndex;
+                public int                order;
+                public UnsafeList<Entity> children;
+            }
+
+            struct ChildSort : IComparer<EnqueuedChild>
+            {
+                public int Compare(EnqueuedChild x, EnqueuedChild y) => x.order.CompareTo(y.order);
             }
         }
     }

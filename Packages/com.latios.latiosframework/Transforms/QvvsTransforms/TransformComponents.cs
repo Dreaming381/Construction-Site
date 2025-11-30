@@ -236,6 +236,7 @@ namespace Latios.Transforms
         WorldAll = WorldPosition | WorldRotation | WorldScale,
     }
 
+    [InternalBufferCapacity(0)]
     public struct EntityInHierarchy : IBufferElementData
     {
         internal EntityWith<RootReference> m_descendantEntity;
@@ -250,6 +251,7 @@ namespace Latios.Transforms
         [CreateProperty] public int firstChildIndex => m_firstChildIndex;
     }
 
+    [InternalBufferCapacity(0)]
     public struct EntityInHierarchyCleanup : IBufferElementData
     {
         public EntityInHierarchy entityInHierarchy;
