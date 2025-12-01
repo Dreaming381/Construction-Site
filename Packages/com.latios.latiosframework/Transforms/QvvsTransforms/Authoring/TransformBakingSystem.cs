@@ -20,20 +20,24 @@ namespace Latios.Transforms.Authoring.Systems
     public partial struct TransformBakingSystem : ISystem
     {
         [BakingType] struct TrackedTag : ICleanupComponentData { }
+        [BakingType] struct LocalOverrideCleanupTag : ICleanupComponentData { }
 
         EntityQuery m_query;
         EntityQuery m_newQuery;
         EntityQuery m_deadQuery;
+        EntityQuery m_newLocalOverrideQuery;
+        EntityQuery m_deadLocalOverrideQuery;
 
         Hierarchy m_hierarchy;
 
         public void OnCreate(ref SystemState state)
         {
-            m_query    = state.Fluent().With<TransformAuthoring>(true).IncludeDisabledEntities().IncludePrefabs().Build();
-            m_newQuery = state.Fluent().With<TransformAuthoring>(true).Without<TrackedTag>().IncludeDisabledEntities().IncludePrefabs().Build();
-            m_newQuery = state.Fluent().With<TrackedTag>(true).Without<TransformAuthoring>().IncludeDisabledEntities().IncludePrefabs().Build();
-
-            m_hierarchy = new Hierarchy(256, Allocator.Persistent);
+            m_query                  = state.Fluent().With<TransformAuthoring>(true).IncludeDisabledEntities().IncludePrefabs().Build();
+            m_newQuery               = state.Fluent().With<TransformAuthoring>(true).Without<TrackedTag>().IncludeDisabledEntities().IncludePrefabs().Build();
+            m_deadQuery              = state.Fluent().With<TrackedTag>(true).Without<TransformAuthoring>().IncludeDisabledEntities().IncludePrefabs().Build();
+            m_newLocalOverrideQuery  = state.Fluent().With<BakedLocalTransformOverride>(true).Without<LocalOverrideCleanupTag>().IncludeDisabledEntities().IncludePrefabs().Build();
+            m_deadLocalOverrideQuery = state.Fluent().With<LocalOverrideCleanupTag>(true).Without<BakedLocalTransformOverride>().IncludeDisabledEntities().IncludePrefabs().Build();
+            m_hierarchy              = new Hierarchy(256, Allocator.Persistent);
         }
 
         public void OnDestroy(ref SystemState state)
@@ -63,19 +67,21 @@ namespace Latios.Transforms.Authoring.Systems
 
             var classifyJh = new ClassifyJob
             {
-                hierarchy                    = m_hierarchy,
-                entityHandle                 = GetEntityTypeHandle(),
-                transformAuthoringHandle     = GetComponentTypeHandle<TransformAuthoring>(true),
-                transformAuthoringLookup     = GetComponentLookup<TransformAuthoring>(true),
-                rootReferenceHandle          = GetComponentTypeHandle<RootReference>(true),
-                authoringSiblingIndexHandle  = GetComponentTypeHandle<AuthoringSiblingIndex>(true),
-                mergedInheritanceFlagsHandle = GetComponentTypeHandle<MergedInheritanceFlags>(true),
-                entityInHierarchyLookup      = GetBufferLookup<EntityInHierarchy>(true),
-                staticHandle                 = GetComponentTypeHandle<Unity.Transforms.Static>(true),
-                worldTransformHandle         = GetComponentTypeHandle<WorldTransform>(false),
-                entityHierarchyChangeStream  = entityInHierarchyChangeStream.AsWriter(),
-                ecb                          = ecb.AsParallelWriter(),
-                lastSystemVersion            = state.LastSystemVersion,
+                hierarchy                         = m_hierarchy,
+                entityHandle                      = GetEntityTypeHandle(),
+                transformAuthoringHandle          = GetComponentTypeHandle<TransformAuthoring>(true),
+                transformAuthoringLookup          = GetComponentLookup<TransformAuthoring>(true),
+                rootReferenceHandle               = GetComponentTypeHandle<RootReference>(true),
+                authoringSiblingIndexHandle       = GetComponentTypeHandle<AuthoringSiblingIndex>(true),
+                mergedInheritanceFlagsHandle      = GetComponentTypeHandle<MergedInheritanceFlags>(true),
+                entityInHierarchyLookup           = GetBufferLookup<EntityInHierarchy>(true),
+                bakedLocalTransformOverrideHandle = GetComponentTypeHandle<BakedLocalTransformOverride>(true),
+                localOverrideCleanupTagHandle     = GetComponentTypeHandle<LocalOverrideCleanupTag>(true),
+                staticHandle                      = GetComponentTypeHandle<Unity.Transforms.Static>(true),
+                worldTransformHandle              = GetComponentTypeHandle<WorldTransform>(false),
+                entityHierarchyChangeStream       = entityInHierarchyChangeStream.AsWriter(),
+                ecb                               = ecb.AsParallelWriter(),
+                lastSystemVersion                 = state.LastSystemVersion,
             }.ScheduleParallel(m_query, JobHandle.CombineDependencies(state.Dependency, createDestroyJh));
 
             var dirtyRootsList           = new NativeList<Entity>(state.WorldUpdateAllocator);
@@ -92,6 +98,8 @@ namespace Latios.Transforms.Authoring.Systems
 
             classifyJh.Complete();
             ecb.Playback(state.EntityManager);
+            state.EntityManager.RemoveComponent<LocalOverrideCleanupTag>(m_deadLocalOverrideQuery);
+            state.EntityManager.AddComponent<LocalOverrideCleanupTag>(m_newLocalOverrideQuery);
             applyHierarchyChangesJh.Complete();
 
             for (int i = 0; i < dirtyRootsList.Length; i++)
@@ -107,13 +115,14 @@ namespace Latios.Transforms.Authoring.Systems
 
             state.Dependency = new RebuildHierarchiesJob
             {
-                hierarchy                = m_hierarchy,
-                dirtyRoots               = dirtyRootsList.AsArray(),
-                transformAuthoringLookup = GetComponentLookup<TransformAuthoring>(true),
-                inheritanceFlagsLookup   = GetComponentLookup<MergedInheritanceFlags>(true),
-                worldTransformLookup     = GetComponentLookup<WorldTransform>(false),
-                rootReferenceLookup      = GetComponentLookup<RootReference>(false),
-                entityInHierarchyLookup  = GetBufferLookup<EntityInHierarchy>(false),
+                hierarchy                         = m_hierarchy,
+                dirtyRoots                        = dirtyRootsList.AsArray(),
+                transformAuthoringLookup          = GetComponentLookup<TransformAuthoring>(true),
+                inheritanceFlagsLookup            = GetComponentLookup<MergedInheritanceFlags>(true),
+                bakedLocalTransformOverrideLookup = GetComponentLookup<BakedLocalTransformOverride>(true),
+                worldTransformLookup              = GetComponentLookup<WorldTransform>(false),
+                rootReferenceLookup               = GetComponentLookup<RootReference>(false),
+                entityInHierarchyLookup           = GetBufferLookup<EntityInHierarchy>(false),
             }.ScheduleParallel(dirtyRootsList.Length, 1, default);
         }
 
@@ -270,16 +279,18 @@ namespace Latios.Transforms.Authoring.Systems
         [BurstCompile]
         struct ClassifyJob : IJobChunk
         {
-            [ReadOnly] public Hierarchy                                    hierarchy;
-            [ReadOnly] public EntityTypeHandle                             entityHandle;
-            [ReadOnly] public ComponentTypeHandle<TransformAuthoring>      transformAuthoringHandle;
-            [ReadOnly] public ComponentLookup<TransformAuthoring>          transformAuthoringLookup;
-            [ReadOnly] public ComponentTypeHandle<RootReference>           rootReferenceHandle;
-            [ReadOnly] public ComponentTypeHandle<AuthoringSiblingIndex>   authoringSiblingIndexHandle;
-            [ReadOnly] public ComponentTypeHandle<MergedInheritanceFlags>  mergedInheritanceFlagsHandle;
-            [ReadOnly] public BufferLookup<EntityInHierarchy>              entityInHierarchyLookup;
-            [ReadOnly] public ComponentTypeHandle<Unity.Transforms.Static> staticHandle;  // Despite the namespace, this is in Unity.Entities assembly
-            public ComponentTypeHandle<WorldTransform>                     worldTransformHandle;
+            [ReadOnly] public Hierarchy                                        hierarchy;
+            [ReadOnly] public EntityTypeHandle                                 entityHandle;
+            [ReadOnly] public ComponentTypeHandle<TransformAuthoring>          transformAuthoringHandle;
+            [ReadOnly] public ComponentLookup<TransformAuthoring>              transformAuthoringLookup;
+            [ReadOnly] public ComponentTypeHandle<RootReference>               rootReferenceHandle;
+            [ReadOnly] public ComponentTypeHandle<AuthoringSiblingIndex>       authoringSiblingIndexHandle;
+            [ReadOnly] public ComponentTypeHandle<MergedInheritanceFlags>      mergedInheritanceFlagsHandle;
+            [ReadOnly] public BufferLookup<EntityInHierarchy>                  entityInHierarchyLookup;
+            [ReadOnly] public ComponentTypeHandle<BakedLocalTransformOverride> bakedLocalTransformOverrideHandle;
+            [ReadOnly] public ComponentTypeHandle<LocalOverrideCleanupTag>     localOverrideCleanupTagHandle;
+            [ReadOnly] public ComponentTypeHandle<Unity.Transforms.Static>     staticHandle;  // Despite the namespace, this is in Unity.Entities assembly
+            public ComponentTypeHandle<WorldTransform>                         worldTransformHandle;
 
             public NativeStream.Writer                entityHierarchyChangeStream;
             public EntityCommandBuffer.ParallelWriter ecb;
@@ -287,17 +298,22 @@ namespace Latios.Transforms.Authoring.Systems
 
             public void Execute(in ArchetypeChunk chunk, int unfilteredChunkIndex, bool useEnabledMask, in v128 chunkEnabledMask)
             {
-                if (!chunk.DidChange(ref transformAuthoringHandle,
-                                     lastSystemVersion) && !chunk.DidChange(ref authoringSiblingIndexHandle, lastSystemVersion) && !chunk.DidOrderChange(lastSystemVersion))
+                bool localOverrideChanged = chunk.DidChange(ref bakedLocalTransformOverrideHandle, lastSystemVersion);
+                if (!chunk.DidChange(ref transformAuthoringHandle, lastSystemVersion) &&
+                    !chunk.DidChange(ref authoringSiblingIndexHandle, lastSystemVersion) &&
+                    !chunk.DidChange(ref mergedInheritanceFlagsHandle, lastSystemVersion) &&
+                    !localOverrideChanged &&
+                    !chunk.DidOrderChange(lastSystemVersion))
                     return;
 
                 entityHierarchyChangeStream.BeginForEachIndex(unfilteredChunkIndex);
 
-                bool hasWorldTransform        = chunk.Has(ref worldTransformHandle);
-                bool hasRootReference         = chunk.Has(ref rootReferenceHandle);
-                bool hasAuthoringSiblingIndex = chunk.Has(ref authoringSiblingIndexHandle);
-                bool hasInheritanceFlags      = chunk.Has(ref mergedInheritanceFlagsHandle);
-                bool hasStatic                = chunk.Has(ref staticHandle);
+                bool hasWorldTransform         = chunk.Has(ref worldTransformHandle);
+                bool hasRootReference          = chunk.Has(ref rootReferenceHandle);
+                bool hasAuthoringSiblingIndex  = chunk.Has(ref authoringSiblingIndexHandle);
+                bool hasInheritanceFlags       = chunk.Has(ref mergedInheritanceFlagsHandle);
+                bool hasStatic                 = chunk.Has(ref staticHandle);
+                localOverrideChanged          |= chunk.Has(ref bakedLocalTransformOverrideHandle) != chunk.Has(ref localOverrideCleanupTagHandle);
 
                 var entities                   = chunk.GetNativeArray(entityHandle);
                 var transformAuthoringArray    = chunk.GetNativeArray(ref transformAuthoringHandle);
@@ -426,8 +442,8 @@ namespace Latios.Transforms.Authoring.Systems
                         var parentChanged = parent != transformAuthoring.RuntimeParent;
                         var currentOrder  = hasAuthoringSiblingIndex ? authoringSiblingIndexArray[i].index : -1;
 
-                        // We check for flags, parent change, order change, and dirty transform data (change in positions, rotation, and scale)
-                        if (inheritanceFlagsChanged || parentChanged || order != currentOrder ||
+                        // We check for override changes, flags, parent change, order change, and dirty transform data (change in positions, rotation, and scale)
+                        if (localOverrideChanged || inheritanceFlagsChanged || parentChanged || order != currentOrder ||
                             ChangeVersionUtility.DidChange(transformAuthoring.ChangeVersion, lastSystemVersion))
                         {
                             entityHierarchyChangeStream.Write(new EntityHierarchyChange
@@ -549,6 +565,7 @@ namespace Latios.Transforms.Authoring.Systems
             [ReadOnly] public NativeArray<Entity>                                        dirtyRoots;
             [ReadOnly] public ComponentLookup<TransformAuthoring>                        transformAuthoringLookup;
             [ReadOnly] public ComponentLookup<MergedInheritanceFlags>                    inheritanceFlagsLookup;
+            [ReadOnly] public ComponentLookup<BakedLocalTransformOverride>               bakedLocalTransformOverrideLookup;
             [NativeDisableParallelForRestriction] public ComponentLookup<WorldTransform> worldTransformLookup;
             [NativeDisableParallelForRestriction] public ComponentLookup<RootReference>  rootReferenceLookup;
             [NativeDisableParallelForRestriction] public BufferLookup<EntityInHierarchy> entityInHierarchyLookup;
@@ -644,6 +661,9 @@ namespace Latios.Transforms.Authoring.Systems
 
             TransformQvvs ComputeWorldTransform(Entity child, Entity parent, TransformQvvs parentTransform)
             {
+                if (bakedLocalTransformOverrideLookup.TryGetComponent(child, out var overrideLocal))
+                    return qvvs.mul(parentTransform, overrideLocal.localTransform);
+
                 var transformAuthoring = transformAuthoringLookup[child];
                 TransformBakeUtils.GetScaleAndStretch(transformAuthoring.LocalScale, out var scale, out var stretch);
                 var workingTransform = new TransformQvvs(transformAuthoring.LocalPosition, transformAuthoring.LocalRotation, scale, stretch);

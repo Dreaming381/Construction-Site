@@ -22,6 +22,12 @@ namespace Latios.Transforms.Authoring
         public int index;
     }
 
+    [BakingType]
+    public struct BakedLocalTransformOverride : IComponentData
+    {
+        public TransformQvvs localTransform;
+    }
+
     public static partial class TransformBakeUtils
     {
         public static void GetScaleAndStretch(float3 localScale, out float scale, out float3 stretch)
