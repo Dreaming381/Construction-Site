@@ -619,10 +619,10 @@ namespace Latios.Kinemation.Systems
 
                 // Some hardcoded mappings to avoid dependencies to Hybrid from DOTS (*cough Latios Transforms)
                 RegisterMaterialPropertyType<WorldToLocal_Tag>(                            "unity_WorldToObject",   overrideTypeSizeGPU: 4 * 4 * 3);
-#if !LATIOS_TRANSFORMS_UNCACHED_QVVS && !LATIOS_TRANSFORMS_UNITY
+#if !LATIOS_TRANSFORMS_UNITY
                 RegisterMaterialPropertyType<WorldTransform>(                              "unity_ObjectToWorld",   4 * 4 * 3);
                 RegisterMaterialPropertyType<PreviousTransform>(                           "unity_MatrixPreviousM", 4 * 4 * 3);
-#elif !LATIOS_TRANSFORMS_UNCACHED_QVVS && LATIOS_TRANSFORMS_UNITY
+#elif LATIOS_TRANSFORMS_UNITY
                 RegisterMaterialPropertyType<LocalToWorld>(                                "unity_ObjectToWorld",   4 * 4 * 3);
                 RegisterMaterialPropertyType<BuiltinMaterialPropertyUnity_MatrixPreviousM>("unity_MatrixPreviousM", 4 * 4 * 3);
 #endif
@@ -1161,10 +1161,10 @@ namespace Latios.Kinemation.Systems
                     worldToLocalType     = TypeManager.GetTypeIndex<WorldToLocal_Tag>(),
                     prevWorldToLocalType = TypeManager.GetTypeIndex<BuiltinMaterialPropertyUnity_MatrixPreviousMI_Tag>(),
 
-#if !LATIOS_TRANSFORMS_UNCACHED_QVVS && !LATIOS_TRANSFORMS_UNITY
+#if !LATIOS_TRANSFORMS_UNITY
                     worldTransformType    = TypeManager.GetTypeIndex<WorldTransform>(),
                     previousTransformType = TypeManager.GetTypeIndex<PreviousTransform>(),
-#elif !LATIOS_TRANSFORMS_UNCACHED_QVVS && LATIOS_TRANSFORMS_UNITY
+#elif LATIOS_TRANSFORMS_UNITY
                     worldTransformType    = TypeManager.GetTypeIndex<LocalToWorld>(),
                     previousTransformType = TypeManager.GetTypeIndex<BuiltinMaterialPropertyUnity_MatrixPreviousM>(),
 #endif
@@ -1216,10 +1216,10 @@ namespace Latios.Kinemation.Systems
 
                 var drawCommandFlagsUpdated = new UpdateDrawCommandFlagsJob
                 {
-#if !LATIOS_TRANSFORMS_UNCACHED_QVVS && !LATIOS_TRANSFORMS_UNITY
+#if !LATIOS_TRANSFORMS_UNITY
                     WorldTransform    = state.GetComponentTypeHandle<WorldTransform>(true),
                     PostProcessMatrix = state.GetComponentTypeHandle<PostProcessMatrix>(true),
-#elif !LATIOS_TRANSFORMS_UNCACHED_QVVS && LATIOS_TRANSFORMS_UNITY
+#elif LATIOS_TRANSFORMS_UNITY
                     WorldTransform = state.GetComponentTypeHandle<LocalToWorld>(true),
 #endif
                     RenderFilterSettings      = state.GetSharedComponentTypeHandle<RenderFilterSettings>(),
@@ -2042,7 +2042,7 @@ namespace Latios.Kinemation.Systems
         }
         #endregion
 
-#if !LATIOS_TRANSFORMS_UNCACHED_QVVS && !LATIOS_TRANSFORMS_UNITY
+#if !LATIOS_TRANSFORMS_UNITY
         [BurstCompile]
         internal unsafe struct UpdateDrawCommandFlagsJob : IJobChunk
         {
@@ -2140,7 +2140,7 @@ namespace Latios.Kinemation.Systems
                 return math.determinant(product) < 0f;
             }
         }
-#elif !LATIOS_TRANSFORMS_UNCACHED_QVVS && LATIOS_TRANSFORMS_UNITY
+#elif LATIOS_TRANSFORMS_UNITY
         [BurstCompile]
         internal unsafe struct UpdateDrawCommandFlagsJob : IJobChunk
         {
