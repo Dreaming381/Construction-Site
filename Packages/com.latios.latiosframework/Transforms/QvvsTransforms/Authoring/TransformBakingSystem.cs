@@ -440,6 +440,8 @@ namespace Latios.Transforms.Authoring.Systems
                         }
                     }
                 }
+
+                entityHierarchyChangeStream.EndForEachIndex();
             }
 
             TransformQvvs GetWorldTransform(in TransformAuthoring transformAuthoring, bool useAuthoringParent = false)

@@ -8,7 +8,7 @@ namespace Latios.Transforms
 {
     public static class TransformsBootstrap
     {
-        public static void InstallTransforms(LatiosWorld world, ComponentSystemGroup defaultComponentSystemGroup, bool extreme = false)
+        public static void InstallTransforms(LatiosWorld world)
         {
             var transformGroup = world.GetExistingSystemManaged<Unity.Transforms.TransformSystemGroup>();
             if (transformGroup != null)
@@ -18,9 +18,10 @@ namespace Latios.Transforms
             if (world.Unmanaged.IsSystemValid(companionTransformSystem))
                 world.Unmanaged.ResolveSystemStateRef(companionTransformSystem).Enabled = false;
 
-            BootstrapTools.InjectSystem(TypeManager.GetSystemTypeIndex<Systems.TransformSuperSystem>(),                 world, defaultComponentSystemGroup);
-            BootstrapTools.InjectSystem(TypeManager.GetSystemTypeIndex<Systems.TransformInitializeSuperSystem>(),       world);
-            BootstrapTools.InjectSystem(TypeManager.GetSystemTypeIndex<Systems.HybridTransformsSyncPointSuperSystem>(), world);
+            BootstrapTools.InjectSystem(TypeManager.GetSystemTypeIndex<Systems.MotionHistoryInitializeSuperSystem>(),      world);
+            BootstrapTools.InjectSystem(TypeManager.GetSystemTypeIndex<Systems.MotionHistoryUpdateSuperSystem>(),          world);
+            BootstrapTools.InjectSystem(TypeManager.GetSystemTypeIndex<Systems.ExportToGameObjectTransformsSuperSystem>(), world);
+            BootstrapTools.InjectSystem(TypeManager.GetSystemTypeIndex<Systems.HybridTransformsSyncPointSuperSystem>(),    world);
         }
     }
 }

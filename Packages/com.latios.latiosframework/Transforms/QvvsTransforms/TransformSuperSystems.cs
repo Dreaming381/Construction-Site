@@ -10,13 +10,14 @@ namespace Latios.Transforms.Systems
 {
     #region Injectable
     /// <summary>
-    /// This group updates at the end of InitializationSystemGroup right after an early transform system update.
-    /// It is responsible for initializing any default-initialized motion history components.
+    /// This group is updated inside the PostSyncPointGroup and performs and initializes motion history after new
+    /// hierarchies have spawned, modifying any default-initialized motion history components.
     /// You can use [UpdateInGroup(typeof(MotionHistoryInitializeSuperSystem))] to add systems that should be updated
     /// at this time.
     /// </summary>
     [DisableAutoCreation]
     [WorldSystemFilter(WorldSystemFilterFlags.Default | WorldSystemFilterFlags.Editor)]
+    [UpdateInGroup(typeof(PostSyncPointGroup))]
     public partial class MotionHistoryInitializeSuperSystem : SuperSystem
     {
         protected override void CreateSystems()
@@ -50,30 +51,17 @@ namespace Latios.Transforms.Systems
     }
 
     /// <summary>
-    /// You can use [UpdateInGroup(typeof(PreTransformSuperSystem))] to add systems that should be updated
-    /// right before the main transform hierarchy synchronization step. This is useful for any entities which
-    /// need to copy a local or world transform from a GameObject or another entity. Note that this group
-    /// updates at least twice per frame.
-    /// </summary>
-    [DisableAutoCreation]
-    public partial class PreTransformSuperSystem : SuperSystem
-    {
-        protected override void CreateSystems()
-        {
-            EnableSystemSorting = true;
-
-            GetOrCreateAndAddUnmanagedSystem<CopyGameObjectTransformToEntitySystem>();
-        }
-    }
-
-    /// <summary>
+    /// This group updates at the end of simulation, and is when any logic that exports entity data back to GameObject
+    /// data should occur.
     /// You can use [UpdateInGroup(typeof(PostTransformSuperSystem))] to add systems that should be updated
-    /// right after the main transform hierarchy synchronization step. This is useful for any entities which
-    /// need to copy a local or world transform to a GameObject or another entity. Note that this group
-    /// updates at least twice per frame.
+    /// at this time.
     /// </summary>
+    /// [WorldSystemFilter(WorldSystemFilterFlags.Default | WorldSystemFilterFlags.Editor)]
+    [UpdateInGroup(typeof(SimulationSystemGroup), OrderLast = true)]
+    [UpdateBefore(typeof(EndSimulationEntityCommandBufferSystem))]
+    [UpdateAfter(typeof(LateSimulationSystemGroup))]
     [DisableAutoCreation]
-    public partial class PostTransformSuperSystem : SuperSystem
+    public partial class ExportToGameObjectTransformsSuperSystem : SuperSystem
     {
         protected override void CreateSystems()
         {
@@ -102,43 +90,6 @@ namespace Latios.Transforms.Systems
             EnableSystemSorting = true;
 
             GetOrCreateAndAddManagedSystem<GameObjectEntityBindingSystem>();
-            //GetOrCreateAndAddManagedSystem<CompanionGameObjectUpdateSystem>();
-        }
-    }
-
-    /// <summary>
-    /// This group is updated inside the PostSyncPointGroup and performs an early transform system update
-    /// to sync up any new or deleted hierarchies, followed by motion history initialization to ensure
-    /// valid history for rendering.
-    /// </summary>
-    [DisableAutoCreation]
-    [WorldSystemFilter(WorldSystemFilterFlags.Default | WorldSystemFilterFlags.Editor)]
-    [UpdateInGroup(typeof(PostSyncPointGroup))]
-    public partial class TransformInitializeSuperSystem : SuperSystem
-    {
-        protected override void CreateSystems()
-        {
-            EnableSystemSorting = false;
-
-            GetOrCreateAndAddManagedSystem<TransformSuperSystem>();
-            GetOrCreateAndAddManagedSystem<MotionHistoryInitializeSuperSystem>();
-        }
-    }
-
-    /// <summary>
-    /// The Transform System Group of Latios Transforms which performs hierarchy synchronization.
-    /// Do not add systems to this group directly, but instead add systems to [Pre/Post]TransformSuperSystem.
-    /// </summary>
-    [DisableAutoCreation]
-    [WorldSystemFilter(WorldSystemFilterFlags.Default | WorldSystemFilterFlags.Editor)]
-    public partial class TransformSuperSystem : SuperSystem
-    {
-        protected override void CreateSystems()
-        {
-            EnableSystemSorting = false;
-
-            GetOrCreateAndAddManagedSystem<PreTransformSuperSystem>();
-            GetOrCreateAndAddManagedSystem<PostTransformSuperSystem>();
         }
     }
     #endregion
