@@ -326,71 +326,6 @@ namespace Latios.Psyshock
         }
     }
 
-#if !LATIOS_TRANSFORMS_UNCACHED_QVVS && !LATIOS_TRANSFORMS_UNITY
-    /// <summary>
-    /// A lookup struct for performing read/write access on a TransformAspect via SafeEntity
-    /// when it is safe to do so.
-    /// </summary>
-    public struct PhysicsTransformAspectLookup
-    {
-        [NativeDisableParallelForRestriction] ComponentLookup<LocalTransform> m_localTransformLookup;
-        [ReadOnly]  ComponentLookup<ParentToWorldTransform>                   m_parentToWorldLookup;
-        [NativeDisableParallelForRestriction] ComponentLookup<WorldTransform> m_worldTransformLookup;
-
-        /// <summary>
-        /// Create the aspect lookup from an system state.
-        /// </summary>
-        /// <param name="state">The system state to create the aspect lookup from.</param>
-        public PhysicsTransformAspectLookup(ref SystemState state)
-        {
-            m_localTransformLookup = state.GetComponentLookup<LocalTransform>(false);
-            m_parentToWorldLookup  = state.GetComponentLookup<ParentToWorldTransform>(true);
-            m_worldTransformLookup = state.GetComponentLookup<WorldTransform>(false);
-        }
-
-        /// <summary>
-        /// Update the lookup container.
-        /// Must be called every frames before using the lookup.
-        /// </summary>
-        /// <param name="state">The system state the aspect lookup was created from.</param>
-        public void Update(ref SystemState state)
-        {
-            m_localTransformLookup.Update(ref state);
-            m_parentToWorldLookup.Update(ref state);
-            m_worldTransformLookup.Update(ref state);
-        }
-
-        /// <summary>
-        /// Gets the TransformAspect instance corresponding to the entity represented by safeEntity.
-        /// When safety checks are enabled, this throws when parallel safety cannot be guaranteed.
-        /// </summary>
-        /// <param name="entity">The entity to create the aspect struct from.</param>
-        /// <returns>Instance of the aspect struct pointing at a specific entity's components data.</returns>
-        public TransformAspect this[SafeEntity entity]
-        {
-            get
-            {
-                ValidateSafeEntityIsSafe(entity);
-                return new TransformAspect(m_localTransformLookup.GetRefRWOptional(entity),
-                                           m_parentToWorldLookup.GetRefROOptional(entity),
-                                           m_worldTransformLookup.GetRefRW(entity));
-            }
-        }
-
-        [Conditional("ENABLE_UNITY_COLLECTIONS_CHECKS")]
-        static void ValidateSafeEntityIsSafe(SafeEntity safeEntity)
-        {
-#if ENABLE_UNITY_COLLECTIONS_CHECKS
-            if (safeEntity.m_entity.Index < 0)
-            {
-                throw new InvalidOperationException(
-                    "The entity is not safe to access by PhysicsTransformAspectLookup within this context. This could be because the scheduling mode does not support safe entity lookup, or because the entity in a PairStream was not granted read-write access at its creation. If you only intend to read this entity, use TransformAspect.Lookup instead.");
-            }
-#endif
-        }
-    }
-#endif
-
     public static class ComponentBrokerPhysicsExtensions
     {
         /// <summary>
@@ -435,22 +370,6 @@ namespace Latios.Psyshock
             ValidateSafeEntityIsSafe(entity);
             return broker.GetBufferIgnoreParallelSafety<T>(entity);
         }
-
-#if !LATIOS_TRANSFORMS_UNCACHED_QVVS && !LATIOS_TRANSFORMS_UNITY
-        /// <summary>
-        /// Tries to get a TransformAspect on the specified entity represented by safeEntity.
-        /// When safety checks are enabled, this throws when parallel safety cannot
-        /// be guaranteed.
-        /// </summary>
-        /// <param name="entity">The entity to get the component from.</param>
-        /// <param name="transformAspect">The TransformAspect from the entity, or default if not valid</param>
-        /// <returns>True if the entity has the required components to form the TransformAspect, false otherwise</returns>
-        public static bool TryGetTransformAspect(ref this ComponentBroker broker, SafeEntity entity, out TransformAspect transformAspect)
-        {
-            ValidateSafeEntityIsSafe(entity);
-            return broker.TryGetTransformAspectIgnoreParallelSafety(entity, out transformAspect);
-        }
-#endif
 
         [Conditional("ENABLE_UNITY_COLLECTIONS_CHECKS")]
         static void ValidateSafeEntityIsSafe(SafeEntity safeEntity)
