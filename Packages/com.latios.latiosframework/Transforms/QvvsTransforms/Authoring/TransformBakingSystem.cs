@@ -63,17 +63,19 @@ namespace Latios.Transforms.Authoring.Systems
 
             var classifyJh = new ClassifyJob
             {
-                hierarchy                   = m_hierarchy,
-                entityHandle                = GetEntityTypeHandle(),
-                transformAuthoringHandle    = GetComponentTypeHandle<TransformAuthoring>(true),
-                transformAuthoringLookup    = GetComponentLookup<TransformAuthoring>(true),
-                rootReferenceHandle         = GetComponentTypeHandle<RootReference>(true),
-                authoringSiblingIndexHandle = GetComponentTypeHandle<AuthoringSiblingIndex>(true),
-                staticHandle                = GetComponentTypeHandle<Unity.Transforms.Static>(true),
-                worldTransformHandle        = GetComponentTypeHandle<WorldTransform>(false),
-                entityHierarchyChangeStream = entityInHierarchyChangeStream.AsWriter(),
-                ecb                         = ecb.AsParallelWriter(),
-                lastSystemVersion           = state.LastSystemVersion,
+                hierarchy                    = m_hierarchy,
+                entityHandle                 = GetEntityTypeHandle(),
+                transformAuthoringHandle     = GetComponentTypeHandle<TransformAuthoring>(true),
+                transformAuthoringLookup     = GetComponentLookup<TransformAuthoring>(true),
+                rootReferenceHandle          = GetComponentTypeHandle<RootReference>(true),
+                authoringSiblingIndexHandle  = GetComponentTypeHandle<AuthoringSiblingIndex>(true),
+                mergedInheritanceFlagsHandle = GetComponentTypeHandle<MergedInheritanceFlags>(true),
+                entityInHierarchyLookup      = GetBufferLookup<EntityInHierarchy>(true),
+                staticHandle                 = GetComponentTypeHandle<Unity.Transforms.Static>(true),
+                worldTransformHandle         = GetComponentTypeHandle<WorldTransform>(false),
+                entityHierarchyChangeStream  = entityInHierarchyChangeStream.AsWriter(),
+                ecb                          = ecb.AsParallelWriter(),
+                lastSystemVersion            = state.LastSystemVersion,
             }.ScheduleParallel(m_query, JobHandle.CombineDependencies(state.Dependency, createDestroyJh));
 
             var dirtyRootsList           = new NativeList<Entity>(state.WorldUpdateAllocator);
@@ -108,6 +110,7 @@ namespace Latios.Transforms.Authoring.Systems
                 hierarchy                = m_hierarchy,
                 dirtyRoots               = dirtyRootsList.AsArray(),
                 transformAuthoringLookup = GetComponentLookup<TransformAuthoring>(true),
+                inheritanceFlagsLookup   = GetComponentLookup<MergedInheritanceFlags>(true),
                 worldTransformLookup     = GetComponentLookup<WorldTransform>(false),
                 rootReferenceLookup      = GetComponentLookup<RootReference>(false),
                 entityInHierarchyLookup  = GetBufferLookup<EntityInHierarchy>(false),
@@ -273,6 +276,8 @@ namespace Latios.Transforms.Authoring.Systems
             [ReadOnly] public ComponentLookup<TransformAuthoring>          transformAuthoringLookup;
             [ReadOnly] public ComponentTypeHandle<RootReference>           rootReferenceHandle;
             [ReadOnly] public ComponentTypeHandle<AuthoringSiblingIndex>   authoringSiblingIndexHandle;
+            [ReadOnly] public ComponentTypeHandle<MergedInheritanceFlags>  mergedInheritanceFlagsHandle;
+            [ReadOnly] public BufferLookup<EntityInHierarchy>              entityInHierarchyLookup;
             [ReadOnly] public ComponentTypeHandle<Unity.Transforms.Static> staticHandle;  // Despite the namespace, this is in Unity.Entities assembly
             public ComponentTypeHandle<WorldTransform>                     worldTransformHandle;
 
@@ -291,12 +296,14 @@ namespace Latios.Transforms.Authoring.Systems
                 bool hasWorldTransform        = chunk.Has(ref worldTransformHandle);
                 bool hasRootReference         = chunk.Has(ref rootReferenceHandle);
                 bool hasAuthoringSiblingIndex = chunk.Has(ref authoringSiblingIndexHandle);
+                bool hasInheritanceFlags      = chunk.Has(ref mergedInheritanceFlagsHandle);
                 bool hasStatic                = chunk.Has(ref staticHandle);
 
                 var entities                   = chunk.GetNativeArray(entityHandle);
                 var transformAuthoringArray    = chunk.GetNativeArray(ref transformAuthoringHandle);
                 var rootReferenceArray         = chunk.GetNativeArray(ref rootReferenceHandle);
                 var authoringSiblingIndexArray = chunk.GetNativeArray(ref authoringSiblingIndexHandle);
+                var inheritanceFlagsArray      = chunk.GetNativeArray(ref mergedInheritanceFlagsHandle);
                 var worldTransformArray        = chunk.GetNativeArray(ref worldTransformHandle);
 
                 for (int i = 0; i < chunk.Count; i++)
@@ -406,10 +413,22 @@ namespace Latios.Transforms.Authoring.Systems
                             var cts = new ComponentTypeSet(ComponentType.ReadOnly<WorldTransform>(), ComponentType.ReadOnly<RootReference>());
                             ecb.AddComponent(unfilteredChunkIndex, entities[i], cts);
                         }
+
+                        bool inheritanceFlagsChanged = false;
+                        if (hasRootReference && entityInHierarchyLookup.TryGetBuffer(rootReferenceArray[i].rootEntity, out var buffer))
+                        {
+                            var currentFlags        = hasInheritanceFlags ? inheritanceFlagsArray[i].flags : default;
+                            var previousFlags       = buffer[rootReferenceArray[i].indexInHierarchy].m_flags;
+                            inheritanceFlagsChanged = currentFlags != previousFlags;
+                        }
+
                         hierarchy.GetOrderAndParent(entities[i], out var order, out var parent);
                         var parentChanged = parent != transformAuthoring.RuntimeParent;
                         var currentOrder  = hasAuthoringSiblingIndex ? authoringSiblingIndexArray[i].index : -1;
-                        if (parentChanged || order != currentOrder || ChangeVersionUtility.DidChange(transformAuthoring.ChangeVersion, lastSystemVersion))
+
+                        // We check for flags, parent change, order change, and dirty transform data (change in positions, rotation, and scale)
+                        if (inheritanceFlagsChanged || parentChanged || order != currentOrder ||
+                            ChangeVersionUtility.DidChange(transformAuthoring.ChangeVersion, lastSystemVersion))
                         {
                             entityHierarchyChangeStream.Write(new EntityHierarchyChange
                             {
@@ -527,6 +546,7 @@ namespace Latios.Transforms.Authoring.Systems
             [ReadOnly] public Hierarchy                                                  hierarchy;
             [ReadOnly] public NativeArray<Entity>                                        dirtyRoots;
             [ReadOnly] public ComponentLookup<TransformAuthoring>                        transformAuthoringLookup;
+            [ReadOnly] public ComponentLookup<MergedInheritanceFlags>                    inheritanceFlagsLookup;
             [NativeDisableParallelForRestriction] public ComponentLookup<WorldTransform> worldTransformLookup;
             [NativeDisableParallelForRestriction] public ComponentLookup<RootReference>  rootReferenceLookup;
             [NativeDisableParallelForRestriction] public BufferLookup<EntityInHierarchy> entityInHierarchyLookup;
@@ -561,15 +581,20 @@ namespace Latios.Transforms.Authoring.Systems
                 EnqueueChildren(childrenOfRoot, 0);
                 while (queue.TryDequeue(out var current))
                 {
-                    computedTransforms.Add(ComputeWorldTransform(current.child, buffer[current.parentIndex].entity, computedTransforms[current.parentIndex]));
+                    inheritanceFlagsLookup.TryGetComponent(current.child, out var flags);
+                    if ((flags.flags & InheritanceFlags.CopyParent) == InheritanceFlags.CopyParent)
+                        computedTransforms.Add(computedTransforms[current.parentIndex]);
+                    else
+                        computedTransforms.Add(ComputeWorldTransform(current.child, buffer[current.parentIndex].entity, computedTransforms[current.parentIndex]));
                     var thisIndex = buffer.Length;
+
                     buffer.Add(new EntityInHierarchy
                     {
                         m_childCount       = current.children.Length,
                         m_descendantEntity = current.child,
                         m_parentIndex      = current.parentIndex,
                         m_firstChildIndex  = -1,
-                        m_flags            = default,
+                        m_flags            = flags.flags,
                     });
                     ref var parentInHierarchy = ref buffer.ElementAt(current.parentIndex);
                     if (parentInHierarchy.firstChildIndex < 0)

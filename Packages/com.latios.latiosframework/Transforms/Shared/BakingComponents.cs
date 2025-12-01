@@ -16,10 +16,10 @@ namespace Latios.Transforms.Authoring
     {
     }
 
-    // You must add [BakingType] to inheriting types
     [BakingType]
-    public interface IRequestCopyParentTransform : IComponentData
+    public struct AuthoringSiblingIndex : IComponentData
     {
+        public int index;
     }
 
     public static partial class TransformBakeUtils

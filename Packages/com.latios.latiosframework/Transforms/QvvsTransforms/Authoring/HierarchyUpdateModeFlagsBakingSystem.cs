@@ -10,24 +10,31 @@ using static Unity.Entities.SystemAPI;
 namespace Latios.Transforms.Authoring
 {
     [BakingType]
-    internal struct HierarchyUpdateModeRequestFlags : IComponentData
+    internal struct RequestedInheritanceFlags : IComponentData
     {
-        public Entity                    entity;
-        public HierarchyUpdateMode.Flags flags;
+        public Entity           entity;
+        public InheritanceFlags flags;
     }
 
-    public static class HierarchyUpdateModeBakerExtensions
+    [BakingType]
+    internal struct MergedInheritanceFlags : IComponentData
+    {
+        public InheritanceFlags flags;
+    }
+
+    public static class InheritanceFlagsBakerExtensions
     {
         /// <summary>
-        /// Adds HierarchyUpdateMode.Flags to the entity, ensuring the entity has such a component after baking.
+        /// Adds InheritanceFlags to the entity within its hierarchy.
         /// Flags are logically ORed by all invocations targeting the same entity.
+        /// Flags are dropped if the entity is a root.
         /// </summary>
         /// <param name="entity">The target entity, which does not have to be from this baker</param>
-        /// <param name="flags">The flags to set. Normal results in the component being present but without any flags set.</param>
-        public static void AddHierarchyModeFlags(this IBaker baker, Entity entity, HierarchyUpdateMode.Flags flags)
+        /// <param name="flags">The flags to set.</param>
+        public static void AddInheritanceFlags(this IBaker baker, Entity entity, InheritanceFlags flags)
         {
             var bakingEntity = baker.CreateAdditionalEntity(TransformUsageFlags.None, true);
-            baker.AddComponent(bakingEntity, new HierarchyUpdateModeRequestFlags
+            baker.AddComponent(bakingEntity, new RequestedInheritanceFlags
             {
                 entity = entity,
                 flags  = flags
@@ -45,33 +52,23 @@ namespace Latios.Transforms.Authoring.Systems
     [UpdateAfter(typeof(UserPreTransformsBakingSystemGroup))]
     [RequireMatchingQueriesForUpdate]
     [BurstCompile]
-    public partial struct HierarchyUpdateModeFlagsBakingSystem : ISystem
+    public partial struct InheritanceFlagsBakingSystem : ISystem
     {
-        [BurstCompile]
-        public void OnCreate(ref SystemState state)
-        {
-        }
-
-        [BurstCompile]
-        public void OnDestroy(ref SystemState state)
-        {
-        }
-
         [BurstCompile]
         public void OnUpdate(ref SystemState state)
         {
-            int flagCount = QueryBuilder().WithAll<HierarchyUpdateModeRequestFlags>().WithOptions(EntityQueryOptions.IncludePrefab | EntityQueryOptions.IncludeDisabledEntities)
+            int flagCount = QueryBuilder().WithAll<RequestedInheritanceFlags>().WithOptions(EntityQueryOptions.IncludePrefab | EntityQueryOptions.IncludeDisabledEntities)
                             .Build().CalculateEntityCountWithoutFiltering();
 
-            var flagMap = new NativeParallelMultiHashMap<Entity, HierarchyUpdateMode.Flags>(flagCount, state.WorldUpdateAllocator);
+            var flagMap = new NativeParallelMultiHashMap<Entity, InheritanceFlags>(flagCount, state.WorldUpdateAllocator);
             var ecbA    = new EntityCommandBuffer(state.WorldUpdateAllocator);
             var ecbB    = new EntityCommandBuffer(state.WorldUpdateAllocator);
 
             new JobA
             {
-                modeLookup = GetComponentLookup<HierarchyUpdateMode>(true),
-                flagMap    = flagMap.AsParallelWriter(),
-                ecbA       = ecbA.AsParallelWriter(),
+                mergedLookup = GetComponentLookup<MergedInheritanceFlags>(true),
+                flagMap      = flagMap.AsParallelWriter(),
+                ecbA         = ecbA.AsParallelWriter(),
             }.ScheduleParallel();
 
             state.CompleteDependency();
@@ -90,14 +87,14 @@ namespace Latios.Transforms.Authoring.Systems
         [BurstCompile]
         partial struct JobA : IJobEntity
         {
-            [ReadOnly] public ComponentLookup<HierarchyUpdateMode>                              modeLookup;
-            public NativeParallelMultiHashMap<Entity, HierarchyUpdateMode.Flags>.ParallelWriter flagMap;
-            public EntityCommandBuffer.ParallelWriter                                           ecbA;
+            [ReadOnly] public ComponentLookup<MergedInheritanceFlags>                  mergedLookup;
+            public NativeParallelMultiHashMap<Entity, InheritanceFlags>.ParallelWriter flagMap;
+            public EntityCommandBuffer.ParallelWriter                                  ecbA;
 
-            public void Execute([ChunkIndexInQuery] int chunkIndexInQuery, in HierarchyUpdateModeRequestFlags request)
+            public void Execute([ChunkIndexInQuery] int chunkIndexInQuery, in RequestedInheritanceFlags request)
             {
-                if (!modeLookup.HasComponent(request.entity))
-                    ecbA.AddComponent<HierarchyUpdateMode>(chunkIndexInQuery, request.entity);
+                if (!mergedLookup.HasComponent(request.entity))
+                    ecbA.AddComponent<MergedInheritanceFlags>(chunkIndexInQuery, request.entity);
                 flagMap.Add(request.entity, request.flags);
             }
         }
@@ -106,21 +103,21 @@ namespace Latios.Transforms.Authoring.Systems
         [BurstCompile]
         partial struct JobB : IJobEntity
         {
-            [ReadOnly] public NativeParallelMultiHashMap<Entity, HierarchyUpdateMode.Flags> flagMap;
-            public EntityCommandBuffer.ParallelWriter                                       ecbB;
+            [ReadOnly] public NativeParallelMultiHashMap<Entity, InheritanceFlags> flagMap;
+            public EntityCommandBuffer.ParallelWriter                              ecbB;
 
-            public void Execute(Entity entity, [ChunkIndexInQuery] int chunkIndexInQuery, ref HierarchyUpdateMode mode)
+            public void Execute(Entity entity, [ChunkIndexInQuery] int chunkIndexInQuery, ref MergedInheritanceFlags mode)
             {
-                mode.modeFlags = HierarchyUpdateMode.Flags.Normal;
+                mode.flags = InheritanceFlags.Normal;
                 if (flagMap.TryGetFirstValue(entity, out var request, out var it))
                 {
-                    mode.modeFlags |= request;
+                    mode.flags |= request;
                     while (flagMap.TryGetNextValue(out request, ref it))
-                        mode.modeFlags |= request;
+                        mode.flags |= request;
                 }
                 else
                 {
-                    ecbB.RemoveComponent<HierarchyUpdateMode>(chunkIndexInQuery, entity);
+                    ecbB.RemoveComponent<MergedInheritanceFlags>(chunkIndexInQuery, entity);
                 }
             }
         }

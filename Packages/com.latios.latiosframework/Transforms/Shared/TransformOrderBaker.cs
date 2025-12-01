@@ -4,14 +4,8 @@ using Unity.Entities;
 using Unity.Mathematics;
 using UnityEngine;
 
-namespace Latios.Transforms
+namespace Latios.Transforms.Authoring
 {
-    [BakingType]
-    public struct AuthoringSiblingIndex : IComponentData
-    {
-        public int index;
-    }
-
     [BakeDerivedTypes]
     public class TransformOrderBakerBaker : Baker<Transform>
     {
