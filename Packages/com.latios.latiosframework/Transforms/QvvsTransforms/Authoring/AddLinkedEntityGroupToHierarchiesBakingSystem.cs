@@ -26,7 +26,7 @@ namespace Latios.Transforms.Authoring.Systems
         public void OnUpdate(ref SystemState state)
         {
             var entities = m_missingLegQuery.ToEntityArray(state.WorldUpdateAllocator);
-            state.EntityManager.AddComponent<EntityInHierarchy>(m_missingLegQuery);
+            state.EntityManager.AddComponent<LinkedEntityGroup>(m_missingLegQuery);
 
             state.Dependency = new Job
             {

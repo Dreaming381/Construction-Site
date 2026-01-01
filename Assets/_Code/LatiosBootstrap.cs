@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using Latios;
 using Latios.Authoring;
@@ -22,8 +22,8 @@ public class LatiosEditorBootstrap : ICustomEditorBootstrap
 {
     public World Initialize(string defaultEditorWorldName)
     {
-        var world                        = new LatiosWorld(defaultEditorWorldName, WorldFlags.Editor);
-        world.useExplicitSystemOrdering  = true;
+        var world                       = new LatiosWorld(defaultEditorWorldName, WorldFlags.Editor);
+        world.useExplicitSystemOrdering = true;
 
         var systems = DefaultWorldInitialization.GetAllSystemTypeIndices(WorldSystemFilterFlags.Default, true);
         BootstrapTools.InjectUnitySystems(systems, world, world.simulationSystemGroup);
@@ -71,3 +71,4 @@ public class LatiosBootstrap : ICustomBootstrap
         return true;
     }
 }
+

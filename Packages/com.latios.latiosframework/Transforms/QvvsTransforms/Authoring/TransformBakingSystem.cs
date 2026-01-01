@@ -597,6 +597,7 @@ namespace Latios.Transforms.Authoring.Systems
                     m_firstChildIndex  = 1,
                     m_flags            = default,
                 });
+                computedTransforms.Add(worldTransformLookup[root].worldTransform);
                 EnqueueChildren(childrenOfRoot, 0);
                 while (queue.TryDequeue(out var current))
                 {

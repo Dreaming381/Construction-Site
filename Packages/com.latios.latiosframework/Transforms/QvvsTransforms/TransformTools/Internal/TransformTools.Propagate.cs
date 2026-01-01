@@ -60,18 +60,22 @@ namespace Latios.Transforms
                 int oldNewTransformsLength = 0;
                 int instructionsLength     = 0;
                 int commandsRead           = 0;
-                for (int instructionsRead = 0; instructionsRead < instructionsLength && commandsRead < commands.Length; instructionsRead++)
+                for (int instructionsRead = 0; instructionsRead < instructionsLength || commandsRead < commands.Length; instructionsRead++)
                 {
                     EntityInHierarchy    entityInHierarchyToPropagate = default;
                     OldNewWorldTransform changedTransform             = default;
                     bool                 dead                         = false;
-                    if (commands[commandsRead].indexInHierarchy <= instructions[instructionsRead].indexInHierarchy)
+                    bool                 hasCommandsRemaining         = commandsRead < commands.Length;
+                    bool                 hasInstructionsRemaining     = instructionsRead < instructionsLength;
+                    if (hasInstructionsRemaining)
+                        entityInHierarchyToPropagate = hierarchy[instructions[instructionsRead].indexInHierarchy];
+                    if (hasCommandsRemaining && (!hasInstructionsRemaining || commands[commandsRead].indexInHierarchy <= instructions[instructionsRead].indexInHierarchy))
                     {
                         // Next up is a command we need to write
                         var command                  = commands[commandsRead];
                         entityInHierarchyToPropagate = hierarchy[command.indexInHierarchy];
 
-                        if (instructionsRead == 0 || command.indexInHierarchy < instructions[instructionsRead].indexInHierarchy)
+                        if (!hasInstructionsRemaining || command.indexInHierarchy < instructions[instructionsRead].indexInHierarchy)
                         {
                             // We aren't inheriting any changes from parents. This is a modification only.
                             changedTransform = ComputeCommandTransform(command, commandTransformParts[commandsRead], new EntityInHierarchyHandle
@@ -79,9 +83,8 @@ namespace Latios.Transforms
                                 m_hierarchy = hierarchy,
                                 m_index     = command.indexInHierarchy
                             }, ref transformLookup, ref aliveLookup);
-                            // Don't advance the reader if we found a new entity out-of-tree
-                            if (instructionsRead != 0)
-                                instructionsRead--;
+                            // Don't advance the instruction reader
+                            instructionsRead--;
                         }
                         else
                         {
