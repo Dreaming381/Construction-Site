@@ -45,6 +45,7 @@ public partial class QvvsTestRootSuperSystem : RootSuperSystem
     protected override void CreateSystems()
     {
         GetOrCreateAndAddUnmanagedSystem<QvvsTestSpinSystem>();
+        GetOrCreateAndAddUnmanagedSystem<QvvsTestParentingSystem>();
     }
 }
 

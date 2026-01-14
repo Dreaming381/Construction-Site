@@ -32,6 +32,10 @@ namespace Latios.Transforms
         /// </summary>
         public int indexInHierarchy => m_index;
         /// <summary>
+        /// The total number of entities (dead or alive) in the hierarchy.
+        /// </summary>
+        public int totalInHierarchy => m_hierarchy.Length;
+        /// <summary>
         /// Returns the handle that refers to the root of the hierarchy.
         /// </summary>
         public EntityInHierarchyHandle root => new EntityInHierarchyHandle
@@ -123,6 +127,9 @@ namespace Latios.Transforms
         /// <returns>The number of descendants. Does not include this handle itself in the count.</returns>
         public int CountBloodDescendants()
         {
+            if (isRoot)
+                return m_hierarchy.Length - 1;
+
             var count           = 0;
             var nextFirstParent = m_index;
             var nextParentCount = 1;
