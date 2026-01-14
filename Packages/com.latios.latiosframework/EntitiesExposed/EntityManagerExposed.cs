@@ -2,7 +2,6 @@
 using System.Diagnostics;
 using Unity.Collections;
 using Unity.Collections.LowLevel.Unsafe;
-using UnityEngine.Rendering.VirtualTexturing;
 
 namespace Unity.Entities.Exposed
 {
@@ -98,6 +97,15 @@ namespace Unity.Entities.Exposed
 #endif
 
         public static Entity GetEntity(this SystemHandle systemHandle) => systemHandle.m_Entity;
+
+        // Todo: Definitely find a better home or wait for the bug to get fixed.
+        // This is just for the TlsfAllocator, which is not thread-safe.
+        public static void RemoveSafetyHandles(this AllocatorManager.AllocatorHandle handle)
+        {
+#if ENABLE_UNITY_COLLECTIONS_CHECKS
+            handle.ChildSafetyHandles.Clear();
+#endif
+        }
     }
 }
 
