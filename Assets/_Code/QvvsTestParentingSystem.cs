@@ -46,6 +46,33 @@ public partial struct QvvsTestParentingSystem : ISystem
 
             var child  = entities[childI];
             var parent = entities[parentI];
+
+            // Check we don't try to assign child's parent as one of child's own descendants
+            if (state.EntityManager.HasComponent<RootReference>(parent))
+            {
+                var parentHandle = state.EntityManager.GetComponentData<RootReference>(parent).ToHandle(state.EntityManager);
+                if (parentHandle.root.entity == child)
+                    continue;
+                if (state.EntityManager.HasComponent<RootReference>(child))
+                {
+                    var childRootRef = state.EntityManager.GetComponentData<RootReference>(child);
+                    if (childRootRef.rootEntity == parentHandle.root.entity && childRootRef.indexInHierarchy < parentHandle.indexInHierarchy)
+                    {
+                        bool fail = false;
+                        for (var h = parentHandle.bloodParent; !h.isRoot; h = h.bloodParent)
+                        {
+                            if (h.indexInHierarchy == childRootRef.indexInHierarchy)
+                            {
+                                fail = true;
+                                break;
+                            }
+                        }
+                        if (fail)
+                            continue;
+                    }
+                }
+            }
+
             state.EntityManager.AddChild(parent, child);
             var rr     = state.EntityManager.GetComponentData<RootReference>(child);
             var handle = rr.ToHandle(state.EntityManager);
