@@ -1,4 +1,4 @@
-#define VALIDATE
+//#define VALIDATE
 
 using System;
 using System.Diagnostics;
@@ -337,6 +337,7 @@ namespace Latios.Transforms
                     TransferSubtreeLEG(em, parent, childRootRef.rootEntity, stackalloc EntityInHierarchy[] { new EntityInHierarchy { m_descendantEntity = child } });
                 UpdateCleanup(em, parent);
                 Validate(em, parent, child);
+                ValidateRemoval(em, childRootRef.rootEntity);
             }
             else
             {
@@ -370,6 +371,7 @@ namespace Latios.Transforms
 
                 tsa.Dispose();
                 Validate(em, parent, child);
+                ValidateRemoval(em, childRootRef.rootEntity);
             }
         }
 
@@ -387,6 +389,7 @@ namespace Latios.Transforms
             {
                 RemoveSingleDescendant(em, hierarchy, childRootRef.indexInHierarchy, true);
                 AddSingleChild(em, hierarchy, 0, child, flags);
+                ValidateRemoval(em, childRootRef.rootEntity);
             }
             else
             {
@@ -395,6 +398,7 @@ namespace Latios.Transforms
                 RemoveSubtree(ref tsa, em, hierarchy, childRootRef.indexInHierarchy, subtree, true);
                 InsertSubtree(em, hierarchy, 0, subtree, flags);
                 tsa.Dispose();
+                ValidateRemoval(em, childRootRef.rootEntity);
             }
             Validate(em, parent, child);
         }
@@ -420,6 +424,7 @@ namespace Latios.Transforms
                     TransferSubtreeLEG(em, parent, childRootRef.rootEntity, stackalloc EntityInHierarchy[] { new EntityInHierarchy { m_descendantEntity = child } });
                 UpdateCleanup(em, parent);
                 Validate(em, parent, child);
+                ValidateRemoval(em, childRootRef.rootEntity);
             }
             else
             {
@@ -435,6 +440,7 @@ namespace Latios.Transforms
 
                 tsa.Dispose();
                 Validate(em, parent, child);
+                ValidateRemoval(em, childRootRef.rootEntity);
             }
         }
 
@@ -455,6 +461,7 @@ namespace Latios.Transforms
                 parentRootRef = em.GetComponentData<RootReference>(parent);
                 AddSingleChild(em, hierarchy, parentRootRef.indexInHierarchy, child, flags);
                 Validate(em, parent, child);
+                ValidateRemoval(em, childRootRef.rootEntity);
             }
             else
             {
@@ -466,6 +473,7 @@ namespace Latios.Transforms
                 InsertSubtree(em, hierarchy, parentRootRef.indexInHierarchy, subtree, flags);
                 tsa.Dispose();
                 Validate(em, parent, child);
+                ValidateRemoval(em, childRootRef.rootEntity);
             }
         }
 
@@ -493,6 +501,7 @@ namespace Latios.Transforms
                                                                                                                                } });
                 UpdateCleanup(em, parent);
                 Validate(em, parent, child);
+                ValidateRemoval(em, childRootRef.rootEntity);
             }
             else
             {
@@ -508,6 +517,7 @@ namespace Latios.Transforms
 
                 tsa.Dispose();
                 Validate(em, parent, child);
+                ValidateRemoval(em, childRootRef.rootEntity);
             }
         }
         #endregion
@@ -542,14 +552,28 @@ namespace Latios.Transforms
                 em.RemoveComponent<RootReference>(subtree[0].entity);
                 bool oldHierarchyHadLEG = em.HasBuffer<LinkedEntityGroup>(oldRoot);
                 AddRootComponents(em, subtree[0].entity, transferLEG && oldHierarchyHadLEG, !oldHierarchyHadLEG, false, false);
-                TransferSubtreeLEG(em, subtree[0].entity, oldRoot, subtree);
+                var newHierarchy = em.GetBuffer<EntityInHierarchy>(subtree[0].entity);
+                //newHierarchy.AddRange()
+                newHierarchy.EnsureCapacity(subtree.Length);
+                for (int i = 0; i < subtree.Length; i++)
+                {
+                    if (i > 0 && em.IsAlive(subtree[i].entity))
+                        em.SetComponentData(subtree[i].entity, new RootReference { m_rootEntity = subtree[0].entity, m_indexInHierarchy = i });
+                    newHierarchy.Add(subtree[i]);
+                }
+                if (oldHierarchyHadLEG && transferLEG)
+                    TransferSubtreeLEG(em, subtree[0].entity, oldRoot, subtree);
+                UpdateCleanup(em, subtree[0].entity);
 
                 tsa.Dispose();
             }
+            ValidateRemoval(em, oldRoot);
         }
 
         static unsafe void UnparentAliveWithoutDescendants(EntityManager em, EntityInHierarchyHandle child, bool transferLEG)
         {
+            var rootEntity = child.root.entity;
+
             var          childEntity = child.entity;
             var          children    = child.bloodChildren;
             Span<Entity> descendants = stackalloc Entity[children.length];
@@ -576,6 +600,7 @@ namespace Latios.Transforms
             }
             child = em.GetComponentData<RootReference>(childEntity).ToHandle(em);
             UnparentAliveSubtree(em, child, transferLEG);
+            ValidateRemoval(em, rootEntity);
         }
 
         static unsafe void UnparentSubtreeWithDeadSubtreeRoot(EntityManager em, EntityInHierarchyHandle deadChild, bool transferLEG)
@@ -585,7 +610,6 @@ namespace Latios.Transforms
             var oldHierarchy        = GetHierarchy(em, oldRoot, out var oldRootIsAlive);
             if (deadChild.bloodChildren.length == 0)
             {
-                var childEntity = deadChild.entity;
                 RemoveSingleDescendant(em, oldHierarchy, oldIndexInHierarchy);
             }
             else
@@ -632,6 +656,7 @@ namespace Latios.Transforms
 
                 tsa.Dispose();
             }
+            ValidateRemoval(em, oldRoot);
         }
 
         static unsafe void UnparentDeadWithoutDescendants(EntityManager em, EntityInHierarchyHandle deadChild, bool transferLEG)
@@ -668,14 +693,17 @@ namespace Latios.Transforms
                 if (rootHandle.m_hierarchy[i].entity == childEntity)
                 {
                     RemoveSingleDescendant(em, hierarchy, i);
+                    ValidateRemoval(em, rootEntity);
                     return;
                 }
             }
+            ValidateRemoval(em, rootEntity);
         }
 
         static unsafe void DetachAllFromRoot(EntityManager em, EntityInHierarchyHandle root, bool transferLEG)
         {
-            Span<Entity> newRoots = stackalloc Entity[root.bloodChildren.length];
+            var          rootEntity = root.entity;
+            Span<Entity> newRoots   = stackalloc Entity[root.bloodChildren.length];
             for (int i = 0; i < newRoots.Length; i++)
                 newRoots[i] = root.bloodChildren[i].entity;
             for (int i = 0; i < newRoots.Length; i++)
@@ -683,6 +711,7 @@ namespace Latios.Transforms
                 var rr = em.GetComponentData<RootReference>(newRoots[i]);
                 RemoveFromHierarchy(em, rr.ToHandle(em), false, transferLEG);
             }
+            ValidateRemoval(em, rootEntity);
         }
         #endregion
 
@@ -1322,6 +1351,17 @@ namespace Latios.Transforms
                 var a = hierarchy[i - 1];
                 if (b.firstChildIndex != a.firstChildIndex + a.childCount)
                     throw new System.InvalidOperationException("Bad removal state.");
+            }
+        }
+
+        [Conditional("VALIDATE")]
+        static void ValidateRemoval(EntityManager em, Entity oldRoot)
+        {
+            if (em.HasBuffer<EntityInHierarchy>(oldRoot))
+            {
+                var hierarchy = em.GetBuffer<EntityInHierarchy>(oldRoot);
+                if (hierarchy.Length < 2)
+                    throw new System.InvalidOperationException("Residue not cleaned up.");
             }
         }
         #endregion

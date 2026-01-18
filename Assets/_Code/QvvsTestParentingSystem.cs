@@ -117,6 +117,42 @@ public partial struct QvvsTestParentingSystem : ISystem
                     UnityEngine.Debug.LogError("A child is not contained within its parent's child span.");
             }
         }
+
+        for (int i = 0; i < 5; i++)
+        {
+            var child = entities[rng.NextInt(0, entities.Length)];
+            if (state.EntityManager.GetComponentData<CheckParent>(child).parent != Entity.Null)
+            {
+                var  handle = state.EntityManager.GetComponentData<RootReference>(child).ToHandle(state.EntityManager);
+                var  root   = handle.root.entity;
+                bool detach = rng.NextBool();
+                if (detach)
+                {
+                    var newParent = handle.bloodParent.entity;
+                    foreach (var orphan in handle.bloodChildren)
+                    {
+                        state.EntityManager.SetComponentData(orphan.entity, new CheckParent { parent = newParent});
+                    }
+                }
+                state.EntityManager.RemoveFromHierarchy(handle, detach);
+                state.EntityManager.SetComponentData(child, new CheckParent { parent = Entity.Null });
+
+                if (state.EntityManager.HasBuffer<EntityInHierarchy>(root))
+                {
+                    handle = state.EntityManager.GetBuffer<EntityInHierarchy>(root).GetRootHandle();
+                    for (int j = 1; j < handle.totalInHierarchy; j++)
+                    {
+                        var h = handle.GetFromIndexInHierarchy(j);
+                        var p = h.bloodParent;
+                        if (state.EntityManager.GetComponentData<CheckParent>(h.entity).parent != p.entity)
+                            UnityEngine.Debug.LogError("A child has the wrong parent index in the hierarchy.");
+                        var firstChildIndex = p.bloodChildren[0].indexInHierarchy;
+                        if (h.indexInHierarchy < firstChildIndex || h.indexInHierarchy >= firstChildIndex + p.bloodChildren.length)
+                            UnityEngine.Debug.LogError("A child is not contained within its parent's child span.");
+                    }
+                }
+            }
+        }
     }
 }
 
