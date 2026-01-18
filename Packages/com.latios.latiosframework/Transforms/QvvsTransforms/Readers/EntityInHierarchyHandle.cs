@@ -32,6 +32,10 @@ namespace Latios.Transforms
         /// </summary>
         public int indexInHierarchy => m_index;
         /// <summary>
+        /// The inheritance flags this handle has set
+        /// </summary>
+        public InheritanceFlags inheritanceFlags => (isRoot ? default : m_hierarchy[m_index].m_flags);
+        /// <summary>
         /// The total number of entities (dead or alive) in the hierarchy.
         /// </summary>
         public int totalInHierarchy => m_hierarchy.Length;
