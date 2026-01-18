@@ -13,7 +13,10 @@ public partial struct QvvsTestParentingSystem : ISystem
     LatiosWorldUnmanaged latiosWorld;
     NativeArray<Entity>  entities;
 
-    struct Tag : IComponentData { }
+    struct CheckParent : IComponentData
+    {
+        public Entity parent;
+    }
 
     [BurstCompile]
     public void OnCreate(ref SystemState state)
@@ -21,7 +24,7 @@ public partial struct QvvsTestParentingSystem : ISystem
         latiosWorld = state.GetLatiosWorldUnmanaged();
 
         var entity = state.EntityManager.CreateEntity();
-        state.EntityManager.AddComponent<Tag>(entity);
+        state.EntityManager.AddComponent<CheckParent>(entity);
         entities = state.EntityManager.Instantiate(entity, 1000, Allocator.Persistent);
         state.InitSystemRng((FixedString128Bytes)"QvvsTestParentingSystem");
     }
@@ -74,8 +77,9 @@ public partial struct QvvsTestParentingSystem : ISystem
             }
 
             state.EntityManager.AddChild(parent, child);
-            var rr     = state.EntityManager.GetComponentData<RootReference>(child);
-            var handle = rr.ToHandle(state.EntityManager);
+            state.EntityManager.SetComponentData(child, new CheckParent { parent = parent });
+            var rr                                                               = state.EntityManager.GetComponentData<RootReference>(child);
+            var handle                                                           = rr.ToHandle(state.EntityManager);
             if (state.EntityManager.HasBuffer<EntityInHierarchy>(parent))
             {
                 var eih = state.EntityManager.GetBuffer<EntityInHierarchy>(parent);
@@ -99,6 +103,19 @@ public partial struct QvvsTestParentingSystem : ISystem
                 UnityEngine.Debug.Log("Parenting successful");
             else
                 UnityEngine.Debug.LogError($"Things went bad! Child: {child.ToFixedString()}, Parent: {parent.ToFixedString()}");
+
+            if (state.EntityManager.GetComponentData<CheckParent>(handle.root.entity).parent != Entity.Null)
+                UnityEngine.Debug.LogError("A root was supposed to have a parent.");
+            for (int j = 1; j < handle.totalInHierarchy; j++)
+            {
+                var h = handle.GetFromIndexInHierarchy(j);
+                var p = h.bloodParent;
+                if (state.EntityManager.GetComponentData<CheckParent>(h.entity).parent != p.entity)
+                    UnityEngine.Debug.LogError("A child has the wrong parent index in the hierarchy.");
+                var firstChildIndex = p.bloodChildren[0].indexInHierarchy;
+                if (h.indexInHierarchy < firstChildIndex || h.indexInHierarchy >= firstChildIndex + p.bloodChildren.length)
+                    UnityEngine.Debug.LogError("A child is not contained within its parent's child span.");
+            }
         }
     }
 }
