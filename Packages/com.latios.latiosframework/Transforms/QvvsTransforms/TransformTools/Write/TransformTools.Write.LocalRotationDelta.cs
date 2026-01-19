@@ -4,8 +4,8 @@ using Unity.Mathematics;
 
 namespace Latios.Transforms
 {
-	public static partial class TransformTools
-	{
+    public static partial class TransformTools
+    {
         #region Apply Local Rotation Delta
         /// <summary>
         /// Rotates the entity by the specified rotation in local-space
@@ -19,7 +19,7 @@ namespace Latios.Transforms
             if (handle.isNull)
             {
                 TransformQvvs currentTransform                                             = entityManager.GetComponentData<WorldTransform>(entity).worldTransform;
-                currentTransform.rotation                                                  = math.mul(rotationToApply, currentTransform.rotation);
+                currentTransform.rotation                                                  = math.normalize(math.mul(rotationToApply, currentTransform.rotation));
                 entityManager.SetComponentData(entity, new WorldTransform { worldTransform = currentTransform });
                 return;
             }
@@ -39,7 +39,7 @@ namespace Latios.Transforms
             {
                 RefRW<WorldTransform> refRW            = componentBroker.GetRW<WorldTransform>(entity);
                 TransformQvvs         currentTransform = refRW.ValueRO.worldTransform;
-                currentTransform.rotation              = math.mul(rotationToApply, currentTransform.rotation);
+                currentTransform.rotation              = math.normalize(math.mul(rotationToApply, currentTransform.rotation));
                 refRW.ValueRW.worldTransform           = currentTransform;
                 return;
             }
@@ -60,7 +60,7 @@ namespace Latios.Transforms
             {
                 RefRW<WorldTransform> refRW            = componentBroker.GetRW<WorldTransform>(entity, key);
                 TransformQvvs         currentTransform = refRW.ValueRO.worldTransform;
-                currentTransform.rotation              = math.mul(rotationToApply, currentTransform.rotation);
+                currentTransform.rotation              = math.normalize(math.mul(rotationToApply, currentTransform.rotation));
                 refRW.ValueRW.worldTransform           = currentTransform;
                 return;
             }
@@ -155,7 +155,7 @@ namespace Latios.Transforms
             {
                 RefRW<WorldTransform> refRW            = transformLookupRW.GetRefRW(entity);
                 TransformQvvs         currentTransform = refRW.ValueRO.worldTransform;
-                currentTransform.rotation              = math.mul(rotationToApply, currentTransform.rotation);
+                currentTransform.rotation              = math.normalize(math.mul(rotationToApply, currentTransform.rotation));
                 refRW.ValueRW.worldTransform           = currentTransform;
                 return;
             }
@@ -187,7 +187,7 @@ namespace Latios.Transforms
             {
                 RefRW<WorldTransform> refRW            = transformLookupRW.GetCheckedLookup(handle.root.entity, key).GetRefRW(entity);
                 TransformQvvs         currentTransform = refRW.ValueRO.worldTransform;
-                currentTransform.rotation              = math.mul(rotationToApply, currentTransform.rotation);
+                currentTransform.rotation              = math.normalize(math.mul(rotationToApply, currentTransform.rotation));
                 refRW.ValueRW.worldTransform           = currentTransform;
                 return;
             }
@@ -260,7 +260,7 @@ namespace Latios.Transforms
             if (handle.isNull)
             {
                 TransformQvvs currentTransform                                                   = entityManager.GetComponentData<TickedWorldTransform>(entity).worldTransform;
-                currentTransform.rotation                                                        = math.mul(rotationToApply, currentTransform.rotation);
+                currentTransform.rotation                                                        = math.normalize(math.mul(rotationToApply, currentTransform.rotation));
                 entityManager.SetComponentData(entity, new TickedWorldTransform { worldTransform = currentTransform });
                 return;
             }
@@ -280,7 +280,7 @@ namespace Latios.Transforms
             {
                 RefRW<TickedWorldTransform> refRW            = componentBroker.GetRW<TickedWorldTransform>(entity);
                 TransformQvvs               currentTransform = refRW.ValueRO.worldTransform;
-                currentTransform.rotation                    = math.mul(rotationToApply, currentTransform.rotation);
+                currentTransform.rotation                    = math.normalize(math.mul(rotationToApply, currentTransform.rotation));
                 refRW.ValueRW.worldTransform                 = currentTransform;
                 return;
             }
@@ -301,7 +301,7 @@ namespace Latios.Transforms
             {
                 RefRW<TickedWorldTransform> refRW            = componentBroker.GetRW<TickedWorldTransform>(entity, key);
                 TransformQvvs               currentTransform = refRW.ValueRO.worldTransform;
-                currentTransform.rotation                    = math.mul(rotationToApply, currentTransform.rotation);
+                currentTransform.rotation                    = math.normalize(math.mul(rotationToApply, currentTransform.rotation));
                 refRW.ValueRW.worldTransform                 = currentTransform;
                 return;
             }
@@ -396,7 +396,7 @@ namespace Latios.Transforms
             {
                 RefRW<TickedWorldTransform> refRW            = transformLookupRW.GetRefRW(entity);
                 TransformQvvs               currentTransform = refRW.ValueRO.worldTransform;
-                currentTransform.rotation                    = math.mul(rotationToApply, currentTransform.rotation);
+                currentTransform.rotation                    = math.normalize(math.mul(rotationToApply, currentTransform.rotation));
                 refRW.ValueRW.worldTransform                 = currentTransform;
                 return;
             }
@@ -428,7 +428,7 @@ namespace Latios.Transforms
             {
                 RefRW<TickedWorldTransform> refRW            = transformLookupRW.GetCheckedLookup(handle.root.entity, key).GetRefRW(entity);
                 TransformQvvs               currentTransform = refRW.ValueRO.worldTransform;
-                currentTransform.rotation                    = math.mul(rotationToApply, currentTransform.rotation);
+                currentTransform.rotation                    = math.normalize(math.mul(rotationToApply, currentTransform.rotation));
                 refRW.ValueRW.worldTransform                 = currentTransform;
                 return;
             }
@@ -484,9 +484,11 @@ namespace Latios.Transforms
                                                           indexInHierarchy = handle.indexInHierarchy,
                                                           writeType        = Propagate.WriteCommand.WriteType.LocalRotationDelta
                                                       } };
-            Propagate.WriteAndPropagate(handle.m_hierarchy, transforms, commands, ref LookupTickedWorldTransform.From(ref transformLookupRW.GetCheckedLookup(handle.root.entity, key)),
+            Propagate.WriteAndPropagate(handle.m_hierarchy, transforms, commands,
+                                        ref LookupTickedWorldTransform.From(ref transformLookupRW.GetCheckedLookup(handle.root.entity, key)),
                                         ref EsilAlive.From(ref entityStorageInfoLookup));
         }
         #endregion
-	}
+    }
 }
+

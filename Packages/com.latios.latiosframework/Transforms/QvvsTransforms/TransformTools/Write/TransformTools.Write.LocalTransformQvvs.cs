@@ -12,16 +12,12 @@ namespace Latios.Transforms
         /// <param name="entity">The entity to set the local transform for</param>
         /// <param name="newLocalTransform">The new local transform value</param>
         /// <param name="entityManager">The EntityManager used to perform the write operations</param>
-        public static void SetLocalTransform(Entity entity, in TransformQvs newLocalTransform, EntityManager entityManager)
+        public static void SetLocalTransform(Entity entity, in TransformQvvs newLocalTransform, EntityManager entityManager)
         {
             var handle = GetHierarchyHandle(entity, entityManager);
             if (handle.isNull)
             {
-                var transform                     = entityManager.GetComponentData<WorldTransform>(entity);
-                transform.worldTransform.position = newLocalTransform.position;
-                transform.worldTransform.rotation = newLocalTransform.rotation;
-                transform.worldTransform.scale    = newLocalTransform.scale;
-                entityManager.SetComponentData(entity, transform);
+                entityManager.SetComponentData(entity, new WorldTransform { worldTransform = newLocalTransform });
                 return;
             }
             SetLocalTransform(handle, in newLocalTransform, entityManager);
@@ -33,15 +29,12 @@ namespace Latios.Transforms
         /// <param name="entity">The entity to set the local transform for</param>
         /// <param name="newLocalTransform">The new local transform value</param>
         /// <param name="componentBroker">A ComponentBroker with write access to WorldTransform and read access to RootReference, EntityInHierarchy, and EntityInHierarchyCleanup</param>
-        public static void SetLocalTransform(Entity entity, in TransformQvs newLocalTransform, ref ComponentBroker componentBroker)
+        public static void SetLocalTransform(Entity entity, in TransformQvvs newLocalTransform, ref ComponentBroker componentBroker)
         {
             var handle = GetHierarchyHandle(entity, ref componentBroker);
             if (handle.isNull)
             {
-                ref var transform  = ref componentBroker.GetRW<WorldTransform>(entity).ValueRW.worldTransform;
-                transform.position = newLocalTransform.position;
-                transform.rotation = newLocalTransform.rotation;
-                transform.scale    = newLocalTransform.scale;
+                componentBroker.GetRW<WorldTransform>(entity).ValueRW.worldTransform = newLocalTransform;
                 return;
             }
             SetLocalTransform(handle, in newLocalTransform, ref componentBroker);
@@ -54,15 +47,12 @@ namespace Latios.Transforms
         /// <param name="newLocalTransform">The new local transform value</param>
         /// <param name="key">A key to ensure the hierarchy is safe to access</param>
         /// <param name="componentBroker">A ComponentBroker with write access to WorldTransform and read access to RootReference, EntityInHierarchy, and EntityInHierarchyCleanup</param>
-        public static void SetLocalTransform(Entity entity, in TransformQvs newLocalTransform, TransformsKey key, ref ComponentBroker componentBroker)
+        public static void SetLocalTransform(Entity entity, in TransformQvvs newLocalTransform, TransformsKey key, ref ComponentBroker componentBroker)
         {
             var handle = GetHierarchyHandle(entity, ref componentBroker);
             if (handle.isNull)
             {
-                ref var transform  = ref componentBroker.GetRW<WorldTransform>(entity, key).ValueRW.worldTransform;
-                transform.position = newLocalTransform.position;
-                transform.rotation = newLocalTransform.rotation;
-                transform.scale    = newLocalTransform.scale;
+                componentBroker.GetRW<WorldTransform>(entity, key).ValueRW.worldTransform = newLocalTransform;
                 return;
             }
             SetLocalTransform(handle, in newLocalTransform, ref componentBroker);
@@ -74,20 +64,17 @@ namespace Latios.Transforms
         /// <param name="handle">The hierarchy handle representing the entity whose local transform should be set</param>
         /// <param name="newLocalTransform">The new local transform value</param>
         /// <param name="entityManager">The EntityManager used to perform the write operations</param>
-        public static void SetLocalTransform(EntityInHierarchyHandle handle, in TransformQvs newLocalTransform, EntityManager entityManager)
+        public static void SetLocalTransform(EntityInHierarchyHandle handle, in TransformQvvs newLocalTransform, EntityManager entityManager)
         {
             if (handle.isCopyParent)
                 return;
-            var                 lookup     = new EntityManagerAccess(entityManager);
-            Span<TransformQvvs> transforms = stackalloc TransformQvvs[] { new TransformQvvs(newLocalTransform.position,
-                                                                                            newLocalTransform.rotation,
-                                                                                            newLocalTransform.scale,
-                                                                                            1f) };
-            Span<Propagate.WriteCommand> commands =
+            var                          lookup     = new EntityManagerAccess(entityManager);
+            Span<TransformQvvs>          transforms = stackalloc TransformQvvs[] { newLocalTransform };
+            Span<Propagate.WriteCommand> commands   =
                 stackalloc Propagate.WriteCommand[] { new Propagate.WriteCommand
                                                       {
                                                           indexInHierarchy = handle.indexInHierarchy,
-                                                          writeType        = Propagate.WriteCommand.WriteType.LocalTransformSet
+                                                          writeType        = Propagate.WriteCommand.WriteType.LocalTransformAndStretchSet
                                                       } };
             Propagate.WriteAndPropagate(handle.m_hierarchy, transforms, commands, ref lookup, ref lookup);
         }
@@ -98,20 +85,17 @@ namespace Latios.Transforms
         /// <param name="handle">The hierarchy handle representing the entity whose local transform should be set</param>
         /// <param name="newLocalTransform">The new local transform value</param>
         /// <param name="componentBroker">A ComponentBroker with write access to WorldTransform and read access to RootReference, EntityInHierarchy, and EntityInHierarchyCleanup</param>
-        public static void SetLocalTransform(EntityInHierarchyHandle handle, in TransformQvs newLocalTransform, ref ComponentBroker componentBroker)
+        public static void SetLocalTransform(EntityInHierarchyHandle handle, in TransformQvvs newLocalTransform, ref ComponentBroker componentBroker)
         {
             if (handle.isCopyParent)
                 return;
-            ref var             lookup     = ref ComponentBrokerAccess.From(ref componentBroker);
-            Span<TransformQvvs> transforms = stackalloc TransformQvvs[] { new TransformQvvs(newLocalTransform.position,
-                                                                                            newLocalTransform.rotation,
-                                                                                            newLocalTransform.scale,
-                                                                                            1f) };
-            Span<Propagate.WriteCommand> commands =
+            ref var                      lookup     = ref ComponentBrokerAccess.From(ref componentBroker);
+            Span<TransformQvvs>          transforms = stackalloc TransformQvvs[] { newLocalTransform };
+            Span<Propagate.WriteCommand> commands   =
                 stackalloc Propagate.WriteCommand[] { new Propagate.WriteCommand
                                                       {
                                                           indexInHierarchy = handle.indexInHierarchy,
-                                                          writeType        = Propagate.WriteCommand.WriteType.LocalTransformSet
+                                                          writeType        = Propagate.WriteCommand.WriteType.LocalTransformAndStretchSet
                                                       } };
             Propagate.WriteAndPropagate(handle.m_hierarchy, transforms, commands, ref lookup, ref lookup);
         }
@@ -123,21 +107,18 @@ namespace Latios.Transforms
         /// <param name="newLocalTransform">The new local transform value</param>
         /// <param name="key">A key to ensure the hierarchy is safe to access</param>
         /// <param name="componentBroker">A ComponentBroker with write access to WorldTransform and read access to RootReference, EntityInHierarchy, and EntityInHierarchyCleanup</param>
-        public static void SetLocalTransform(EntityInHierarchyHandle handle, in TransformQvs newLocalTransform, TransformsKey key, ref ComponentBroker componentBroker)
+        public static void SetLocalTransform(EntityInHierarchyHandle handle, in TransformQvvs newLocalTransform, TransformsKey key, ref ComponentBroker componentBroker)
         {
             if (handle.isCopyParent)
                 return;
             key.Validate(handle.root.entity);
-            ref var             lookup     = ref ComponentBrokerParallelAccess.From(ref componentBroker);
-            Span<TransformQvvs> transforms = stackalloc TransformQvvs[] { new TransformQvvs(newLocalTransform.position,
-                                                                                            newLocalTransform.rotation,
-                                                                                            newLocalTransform.scale,
-                                                                                            1f) };
-            Span<Propagate.WriteCommand> commands =
+            ref var                      lookup     = ref ComponentBrokerParallelAccess.From(ref componentBroker);
+            Span<TransformQvvs>          transforms = stackalloc TransformQvvs[] { newLocalTransform };
+            Span<Propagate.WriteCommand> commands   =
                 stackalloc Propagate.WriteCommand[] { new Propagate.WriteCommand
                                                       {
                                                           indexInHierarchy = handle.indexInHierarchy,
-                                                          writeType        = Propagate.WriteCommand.WriteType.LocalTransformSet
+                                                          writeType        = Propagate.WriteCommand.WriteType.LocalTransformAndStretchSet
                                                       } };
             Propagate.WriteAndPropagate(handle.m_hierarchy, transforms, commands, ref lookup, ref lookup);
         }
@@ -153,7 +134,7 @@ namespace Latios.Transforms
         /// <param name="entityInHierarchyLookupRO">A readonly BufferLookup to the EntityInHierarchy dynamic buffer</param>
         /// <param name="entityInHierarchyCleanupLookupRO">A readonly BufferLookup to the EntityInHierarchyCleanup dynamic buffer</param>
         public static void SetLocalTransform(Entity entity,
-                                             in TransformQvs newLocalTransform,
+                                             in TransformQvvs newLocalTransform,
                                              ref ComponentLookup<WorldTransform>        transformLookupRW,
                                              ref EntityStorageInfoLookup entityStorageInfoLookup,
                                              ref ComponentLookup<RootReference>         rootReferenceLookupRO,
@@ -163,10 +144,7 @@ namespace Latios.Transforms
             var handle = GetHierarchyHandle(entity, ref rootReferenceLookupRO, ref entityInHierarchyLookupRO, ref entityInHierarchyCleanupLookupRO);
             if (handle.isNull)
             {
-                ref var transform  = ref transformLookupRW.GetRefRW(entity).ValueRW.worldTransform;
-                transform.position = newLocalTransform.position;
-                transform.rotation = newLocalTransform.rotation;
-                transform.scale    = newLocalTransform.scale;
+                transformLookupRW[entity] = new WorldTransform { worldTransform = newLocalTransform };
                 return;
             }
             SetLocalTransform(handle, in newLocalTransform, ref transformLookupRW, ref entityStorageInfoLookup);
@@ -184,7 +162,7 @@ namespace Latios.Transforms
         /// <param name="entityInHierarchyLookupRO">A readonly BufferLookup to the EntityInHierarchy dynamic buffer</param>
         /// <param name="entityInHierarchyCleanupLookupRO">A readonly BufferLookup to the EntityInHierarchyCleanup dynamic buffer</param>
         public static void SetLocalTransform(Entity entity,
-                                             in TransformQvs newLocalTransform,
+                                             in TransformQvvs newLocalTransform,
                                              TransformsKey key,
                                              ref TransformsComponentLookup<WorldTransform> transformLookupRW,
                                              ref EntityStorageInfoLookup entityStorageInfoLookup,
@@ -195,10 +173,7 @@ namespace Latios.Transforms
             var handle = GetHierarchyHandle(entity, ref rootReferenceLookupRO, ref entityInHierarchyLookupRO, ref entityInHierarchyCleanupLookupRO);
             if (handle.isNull)
             {
-                ref var transform  = ref transformLookupRW.GetCheckedLookup(entity, key).GetRefRW(entity).ValueRW.worldTransform;
-                transform.position = newLocalTransform.position;
-                transform.rotation = newLocalTransform.rotation;
-                transform.scale    = newLocalTransform.scale;
+                transformLookupRW.GetCheckedLookup(handle.root.entity, key)[entity] = new WorldTransform { worldTransform = newLocalTransform };
                 return;
             }
             SetLocalTransform(handle, in newLocalTransform, ref transformLookupRW.GetCheckedLookup(entity, key), ref entityStorageInfoLookup);
@@ -212,21 +187,18 @@ namespace Latios.Transforms
         /// <param name="transformLookupRW">A write-accessible ComponentLookup. Writing to multiple entities within the same hierarchy from different threads is not safe!</param>
         /// <param name="entityStorageInfoLookup">An EntityStorageInfoLookup from the same world the hierarchy belongs to</param>
         public static void SetLocalTransform(EntityInHierarchyHandle handle,
-                                             in TransformQvs newLocalTransform,
+                                             in TransformQvvs newLocalTransform,
                                              ref ComponentLookup<WorldTransform> transformLookupRW,
                                              ref EntityStorageInfoLookup entityStorageInfoLookup)
         {
             if (handle.isCopyParent)
                 return;
-            Span<TransformQvvs> transforms = stackalloc TransformQvvs[] { new TransformQvvs(newLocalTransform.position,
-                                                                                            newLocalTransform.rotation,
-                                                                                            newLocalTransform.scale,
-                                                                                            1f) };
-            Span<Propagate.WriteCommand> commands =
+            Span<TransformQvvs>          transforms = stackalloc TransformQvvs[] { newLocalTransform };
+            Span<Propagate.WriteCommand> commands   =
                 stackalloc Propagate.WriteCommand[] { new Propagate.WriteCommand
                                                       {
                                                           indexInHierarchy = handle.indexInHierarchy,
-                                                          writeType        = Propagate.WriteCommand.WriteType.LocalTransformSet
+                                                          writeType        = Propagate.WriteCommand.WriteType.LocalTransformAndStretchSet
                                                       } };
             Propagate.WriteAndPropagate(handle.m_hierarchy, transforms, commands, ref LookupWorldTransform.From(ref transformLookupRW),
                                         ref EsilAlive.From(ref entityStorageInfoLookup));
@@ -241,7 +213,7 @@ namespace Latios.Transforms
         /// <param name="transformLookupRW">A TransformsComponentLookup for parallel write access when the hierarchy is safe to access</param>
         /// <param name="entityStorageInfoLookup">An EntityStorageInfoLookup from the same world the hierarchy belongs to</param>
         public static void SetLocalTransform(EntityInHierarchyHandle handle,
-                                             in TransformQvs newLocalTransform,
+                                             in TransformQvvs newLocalTransform,
                                              TransformsKey key,
                                              ref TransformsComponentLookup<WorldTransform> transformLookupRW,
                                              ref EntityStorageInfoLookup entityStorageInfoLookup)
@@ -249,15 +221,12 @@ namespace Latios.Transforms
             if (handle.isCopyParent)
                 return;
             key.Validate(handle.root.entity);
-            Span<TransformQvvs> transforms = stackalloc TransformQvvs[] { new TransformQvvs(newLocalTransform.position,
-                                                                                            newLocalTransform.rotation,
-                                                                                            newLocalTransform.scale,
-                                                                                            1f) };
-            Span<Propagate.WriteCommand> commands =
+            Span<TransformQvvs>          transforms = stackalloc TransformQvvs[] { newLocalTransform };
+            Span<Propagate.WriteCommand> commands   =
                 stackalloc Propagate.WriteCommand[] { new Propagate.WriteCommand
                                                       {
                                                           indexInHierarchy = handle.indexInHierarchy,
-                                                          writeType        = Propagate.WriteCommand.WriteType.LocalTransformSet
+                                                          writeType        = Propagate.WriteCommand.WriteType.LocalTransformAndStretchSet
                                                       } };
             Propagate.WriteAndPropagate(handle.m_hierarchy, transforms, commands, ref LookupWorldTransform.From(ref transformLookupRW.GetCheckedLookup(handle.root.entity, key)),
                                         ref EsilAlive.From(ref entityStorageInfoLookup));
@@ -271,16 +240,14 @@ namespace Latios.Transforms
         /// <param name="entity">The entity to set the ticked local transform for</param>
         /// <param name="newLocalTransform">The new transform value</param>
         /// <param name="entityManager">The EntityManager used to perform the write operations</param>
-        public static void SetTickedLocalTransform(Entity entity, in TransformQvs newLocalTransform, EntityManager entityManager)
+        public static void SetTickedLocalTransform(Entity entity, in TransformQvvs newLocalTransform, EntityManager entityManager)
         {
             var handle = GetHierarchyHandle(entity, entityManager);
             if (handle.isNull)
             {
-                var transform                     = entityManager.GetComponentData<TickedWorldTransform>(entity);
-                transform.worldTransform.position = newLocalTransform.position;
-                transform.worldTransform.rotation = newLocalTransform.rotation;
-                transform.worldTransform.scale    = newLocalTransform.scale;
-                entityManager.SetComponentData(entity, transform);
+                entityManager.SetComponentData(entity, new TickedWorldTransform() {
+                    worldTransform = newLocalTransform
+                });
                 return;
             }
             SetTickedLocalTransform(handle, newLocalTransform, entityManager);
@@ -292,15 +259,12 @@ namespace Latios.Transforms
         /// <param name="entity">The entity to set the ticked local transform for</param>
         /// <param name="newLocalTransform">The new transform value</param>
         /// <param name="componentBroker">A ComponentBroker with write access to TickedWorldTransform and read access to RootReference, EntityInHierarchy, and EntityInHierarchyCleanup</param>
-        public static void SetTickedLocalTransform(Entity entity, in TransformQvs newLocalTransform, ref ComponentBroker componentBroker)
+        public static void SetTickedLocalTransform(Entity entity, in TransformQvvs newLocalTransform, ref ComponentBroker componentBroker)
         {
             var handle = GetHierarchyHandle(entity, ref componentBroker);
             if (handle.isNull)
             {
-                ref var transform  = ref componentBroker.GetRW<TickedWorldTransform>(entity).ValueRW.worldTransform;
-                transform.position = newLocalTransform.position;
-                transform.rotation = newLocalTransform.rotation;
-                transform.scale    = newLocalTransform.scale;
+                componentBroker.GetRW<TickedWorldTransform>(entity).ValueRW.worldTransform = newLocalTransform;
                 return;
             }
             SetTickedLocalTransform(handle, in newLocalTransform, ref componentBroker);
@@ -313,15 +277,12 @@ namespace Latios.Transforms
         /// <param name="newLocalTransform">The new transform value</param>
         /// <param name="key">A key to ensure the hierarchy is safe to access</param>
         /// <param name="componentBroker">A ComponentBroker with write access to TickedWorldTransform and read access to RootReference, EntityInHierarchy, and EntityInHierarchyCleanup</param>
-        public static void SetTickedLocalTransform(Entity entity, in TransformQvs newLocalTransform, TransformsKey key, ref ComponentBroker componentBroker)
+        public static void SetTickedLocalTransform(Entity entity, in TransformQvvs newLocalTransform, TransformsKey key, ref ComponentBroker componentBroker)
         {
             var handle = GetHierarchyHandle(entity, ref componentBroker);
             if (handle.isNull)
             {
-                ref var transform  = ref componentBroker.GetRW<TickedWorldTransform>(entity, key).ValueRW.worldTransform;
-                transform.position = newLocalTransform.position;
-                transform.rotation = newLocalTransform.rotation;
-                transform.scale    = newLocalTransform.scale;
+                componentBroker.GetRW<TickedWorldTransform>(entity, key).ValueRW.worldTransform = newLocalTransform;
                 return;
             }
             SetTickedLocalTransform(handle, in newLocalTransform, ref componentBroker);
@@ -333,20 +294,17 @@ namespace Latios.Transforms
         /// <param name="handle">The hierarchy handle representing the entity whose ticked local transform should be set</param>
         /// <param name="newLocalTransform">The new local transform value</param>
         /// <param name="entityManager">The EntityManager used to perform the write operations</param>
-        public static void SetTickedLocalTransform(EntityInHierarchyHandle handle, in TransformQvs newLocalTransform, EntityManager entityManager)
+        public static void SetTickedLocalTransform(EntityInHierarchyHandle handle, in TransformQvvs newLocalTransform, EntityManager entityManager)
         {
             if (handle.isCopyParent)
                 return;
-            var                 lookup     = new TickedEntityManagerAccess(entityManager);
-            Span<TransformQvvs> transforms = stackalloc TransformQvvs[] { new TransformQvvs(newLocalTransform.position,
-                                                                                            newLocalTransform.rotation,
-                                                                                            newLocalTransform.scale,
-                                                                                            1f) };
-            Span<Propagate.WriteCommand> commands =
+            var                          lookup     = new TickedEntityManagerAccess(entityManager);
+            Span<TransformQvvs>          transforms = stackalloc TransformQvvs[] { newLocalTransform };
+            Span<Propagate.WriteCommand> commands   =
                 stackalloc Propagate.WriteCommand[] { new Propagate.WriteCommand
                                                       {
                                                           indexInHierarchy = handle.indexInHierarchy,
-                                                          writeType        = Propagate.WriteCommand.WriteType.LocalTransformSet
+                                                          writeType        = Propagate.WriteCommand.WriteType.LocalTransformAndStretchSet
                                                       } };
             Propagate.WriteAndPropagate(handle.m_hierarchy, transforms, commands, ref lookup, ref lookup);
         }
@@ -357,20 +315,17 @@ namespace Latios.Transforms
         /// <param name="handle">The hierarchy handle representing the entity whose ticked local transform should be set</param>
         /// <param name="newLocalTransform">The new local transform value</param>
         /// <param name="componentBroker">A ComponentBroker with write access to TickedWorldTransform and read access to RootReference, EntityInHierarchy, and EntityInHierarchyCleanup</param>
-        public static void SetTickedLocalTransform(EntityInHierarchyHandle handle, in TransformQvs newLocalTransform, ref ComponentBroker componentBroker)
+        public static void SetTickedLocalTransform(EntityInHierarchyHandle handle, in TransformQvvs newLocalTransform, ref ComponentBroker componentBroker)
         {
             if (handle.isCopyParent)
                 return;
-            ref var             lookup     = ref ComponentBrokerAccess.From(ref componentBroker);
-            Span<TransformQvvs> transforms = stackalloc TransformQvvs[] { new TransformQvvs(newLocalTransform.position,
-                                                                                            newLocalTransform.rotation,
-                                                                                            newLocalTransform.scale,
-                                                                                            1f) };
-            Span<Propagate.WriteCommand> commands =
+            ref var                      lookup     = ref ComponentBrokerAccess.From(ref componentBroker);
+            Span<TransformQvvs>          transforms = stackalloc TransformQvvs[] { newLocalTransform };
+            Span<Propagate.WriteCommand> commands   =
                 stackalloc Propagate.WriteCommand[] { new Propagate.WriteCommand
                                                       {
                                                           indexInHierarchy = handle.indexInHierarchy,
-                                                          writeType        = Propagate.WriteCommand.WriteType.LocalTransformSet
+                                                          writeType        = Propagate.WriteCommand.WriteType.LocalTransformAndStretchSet
                                                       } };
             Propagate.WriteAndPropagate(handle.m_hierarchy, transforms, commands, ref lookup, ref lookup);
         }
@@ -382,21 +337,18 @@ namespace Latios.Transforms
         /// <param name="newLocalTransform">The new local transform value</param>
         /// <param name="key">A key to ensure the hierarchy is safe to access</param>
         /// <param name="componentBroker">A ComponentBroker with write access to TickedWorldTransform and read access to RootReference, EntityInHierarchy, and EntityInHierarchyCleanup</param>
-        public static void SetTickedLocalTransform(EntityInHierarchyHandle handle, in TransformQvs newLocalTransform, TransformsKey key, ref ComponentBroker componentBroker)
+        public static void SetTickedLocalTransform(EntityInHierarchyHandle handle, in TransformQvvs newLocalTransform, TransformsKey key, ref ComponentBroker componentBroker)
         {
             if (handle.isCopyParent)
                 return;
             key.Validate(handle.root.entity);
-            ref var             lookup     = ref ComponentBrokerParallelAccess.From(ref componentBroker);
-            Span<TransformQvvs> transforms = stackalloc TransformQvvs[] { new TransformQvvs(newLocalTransform.position,
-                                                                                            newLocalTransform.rotation,
-                                                                                            newLocalTransform.scale,
-                                                                                            1f) };
-            Span<Propagate.WriteCommand> commands =
+            ref var                      lookup     = ref ComponentBrokerParallelAccess.From(ref componentBroker);
+            Span<TransformQvvs>          transforms = stackalloc TransformQvvs[] { newLocalTransform };
+            Span<Propagate.WriteCommand> commands   =
                 stackalloc Propagate.WriteCommand[] { new Propagate.WriteCommand
                                                       {
                                                           indexInHierarchy = handle.indexInHierarchy,
-                                                          writeType        = Propagate.WriteCommand.WriteType.LocalTransformSet
+                                                          writeType        = Propagate.WriteCommand.WriteType.LocalTransformAndStretchSet
                                                       } };
             Propagate.WriteAndPropagate(handle.m_hierarchy, transforms, commands, ref lookup, ref lookup);
         }
@@ -412,7 +364,7 @@ namespace Latios.Transforms
         /// <param name="entityInHierarchyLookupRO">A readonly BufferLookup to the EntityInHierarchy dynamic buffer</param>
         /// <param name="entityInHierarchyCleanupLookupRO">A readonly BufferLookup to the EntityInHierarchyCleanup dynamic buffer</param>
         public static void SetTickedLocalTransform(Entity entity,
-                                                   in TransformQvs newLocalTransform,
+                                                   in TransformQvvs newLocalTransform,
                                                    ref ComponentLookup<TickedWorldTransform>  transformLookupRW,
                                                    ref EntityStorageInfoLookup entityStorageInfoLookup,
                                                    ref ComponentLookup<RootReference>         rootReferenceLookupRO,
@@ -422,10 +374,7 @@ namespace Latios.Transforms
             var handle = GetHierarchyHandle(entity, ref rootReferenceLookupRO, ref entityInHierarchyLookupRO, ref entityInHierarchyCleanupLookupRO);
             if (handle.isNull)
             {
-                ref var transform  = ref transformLookupRW.GetRefRW(entity).ValueRW.worldTransform;
-                transform.position = newLocalTransform.position;
-                transform.rotation = newLocalTransform.rotation;
-                transform.scale    = newLocalTransform.scale;
+                transformLookupRW[entity] = new TickedWorldTransform { worldTransform = newLocalTransform };
                 return;
             }
             SetTickedLocalTransform(handle, in newLocalTransform, ref transformLookupRW, ref entityStorageInfoLookup);
@@ -443,7 +392,7 @@ namespace Latios.Transforms
         /// <param name="entityInHierarchyLookupRO">A readonly BufferLookup to the EntityInHierarchy dynamic buffer</param>
         /// <param name="entityInHierarchyCleanupLookupRO">A readonly BufferLookup to the EntityInHierarchyCleanup dynamic buffer</param>
         public static void SetTickedLocalTransform(Entity entity,
-                                                   in TransformQvs newLocalTransform,
+                                                   in TransformQvvs newLocalTransform,
                                                    TransformsKey key,
                                                    ref TransformsComponentLookup<TickedWorldTransform> transformLookupRW,
                                                    ref EntityStorageInfoLookup entityStorageInfoLookup,
@@ -454,10 +403,7 @@ namespace Latios.Transforms
             var handle = GetHierarchyHandle(entity, ref rootReferenceLookupRO, ref entityInHierarchyLookupRO, ref entityInHierarchyCleanupLookupRO);
             if (handle.isNull)
             {
-                ref var transform  = ref transformLookupRW.GetCheckedLookup(entity, key).GetRefRW(entity).ValueRW.worldTransform;
-                transform.position = newLocalTransform.position;
-                transform.rotation = newLocalTransform.rotation;
-                transform.scale    = newLocalTransform.scale;
+                transformLookupRW.GetCheckedLookup(handle.root.entity, key)[entity] = new TickedWorldTransform { worldTransform = newLocalTransform };
                 return;
             }
             SetTickedLocalTransform(handle, in newLocalTransform, ref transformLookupRW.GetCheckedLookup(entity, key), ref entityStorageInfoLookup);
@@ -471,21 +417,18 @@ namespace Latios.Transforms
         /// <param name="transformLookupRW">A write-accessible ComponentLookup. Writing to multiple entities within the same hierarchy from different threads is not safe!</param>
         /// <param name="entityStorageInfoLookup">An EntityStorageInfoLookup from the same world the hierarchy belongs to</param>
         public static void SetTickedLocalTransform(EntityInHierarchyHandle handle,
-                                                   in TransformQvs newLocalTransform,
+                                                   in TransformQvvs newLocalTransform,
                                                    ref ComponentLookup<TickedWorldTransform> transformLookupRW,
                                                    ref EntityStorageInfoLookup entityStorageInfoLookup)
         {
             if (handle.isCopyParent)
                 return;
-            Span<TransformQvvs> transforms = stackalloc TransformQvvs[] { new TransformQvvs(newLocalTransform.position,
-                                                                                            newLocalTransform.rotation,
-                                                                                            newLocalTransform.scale,
-                                                                                            1f) };
-            Span<Propagate.WriteCommand> commands =
+            Span<TransformQvvs>          transforms = stackalloc TransformQvvs[] { newLocalTransform };
+            Span<Propagate.WriteCommand> commands   =
                 stackalloc Propagate.WriteCommand[] { new Propagate.WriteCommand
                                                       {
                                                           indexInHierarchy = handle.indexInHierarchy,
-                                                          writeType        = Propagate.WriteCommand.WriteType.LocalTransformSet
+                                                          writeType        = Propagate.WriteCommand.WriteType.LocalTransformAndStretchSet
                                                       } };
             Propagate.WriteAndPropagate(handle.m_hierarchy, transforms, commands, ref LookupTickedWorldTransform.From(ref transformLookupRW),
                                         ref EsilAlive.From(ref entityStorageInfoLookup));
@@ -500,7 +443,7 @@ namespace Latios.Transforms
         /// <param name="transformLookupRW">A TransformsComponentLookup for parallel write access when the hierarchy is safe to access</param>
         /// <param name="entityStorageInfoLookup">An EntityStorageInfoLookup from the same world the hierarchy belongs to</param>
         public static void SetTickedLocalTransform(EntityInHierarchyHandle handle,
-                                                   in TransformQvs newLocalTransform,
+                                                   in TransformQvvs newLocalTransform,
                                                    TransformsKey key,
                                                    ref TransformsComponentLookup<TickedWorldTransform> transformLookupRW,
                                                    ref EntityStorageInfoLookup entityStorageInfoLookup)
@@ -508,15 +451,12 @@ namespace Latios.Transforms
             if (handle.isCopyParent)
                 return;
             key.Validate(handle.root.entity);
-            Span<TransformQvvs> transforms = stackalloc TransformQvvs[] { new TransformQvvs(newLocalTransform.position,
-                                                                                            newLocalTransform.rotation,
-                                                                                            newLocalTransform.scale,
-                                                                                            1f) };
-            Span<Propagate.WriteCommand> commands =
+            Span<TransformQvvs>          transforms = stackalloc TransformQvvs[] { newLocalTransform };
+            Span<Propagate.WriteCommand> commands   =
                 stackalloc Propagate.WriteCommand[] { new Propagate.WriteCommand
                                                       {
                                                           indexInHierarchy = handle.indexInHierarchy,
-                                                          writeType        = Propagate.WriteCommand.WriteType.LocalTransformSet
+                                                          writeType        = Propagate.WriteCommand.WriteType.LocalTransformAndStretchSet
                                                       } };
             Propagate.WriteAndPropagate(handle.m_hierarchy, transforms, commands,
                                         ref LookupTickedWorldTransform.From(ref transformLookupRW.GetCheckedLookup(handle.root.entity, key)),

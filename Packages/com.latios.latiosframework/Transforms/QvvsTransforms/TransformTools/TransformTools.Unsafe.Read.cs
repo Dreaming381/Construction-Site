@@ -28,23 +28,47 @@ namespace Latios.Transforms
                                   out parentTransform);
 
             /// <summary>
-            /// Computes the ticked local transform of the entity. If the entity does not have a parent, then this
-            /// is identical to the TickedWorldTransform without stretch.
+            /// Computes the local transform of the entity. If the entity does not have a parent, then this
+            /// is identical to the WorldTransform without stretch.
             /// </summary>
             /// <param name="handle">The handle of the entity within the hierarchy, often obtained from the RootReference component</param>
-            /// <param name="tickedWorldTransform">The WorldTransform of the entity possessing the RootReference, obtained from chunk iteration</param>
-            /// <param name="entityManager">The EntityManager which manages the entity</param>
+            /// <param name="worldTransform">The WorldTransform of the entity possessing the RootReference, obtained from chunk iteration</param>
+            /// <param name="componentBroker">A ComponentBroker with read access to EntityInHierarchy, EntityInHierarchyCleanup, and WorldTransform</param>
             /// <param name="parentTransform">The parent's world-space transform for convenience, identity if there was no parent</param>
             /// <returns>The local position, rotation, and uniform scale of the entity</returns>
-            public static TransformQvs TickedLocalTransformFrom(EntityInHierarchyHandle handle,
-                                                                in TickedWorldTransform tickedWorldTransform,
-                                                                EntityManager entityManager,
-                                                                out TransformQvvs parentTransform)
+            public static TransformQvs LocalTransformFrom(EntityInHierarchyHandle handle,
+                                                          in WorldTransform worldTransform,
+                                                          ref ComponentBroker componentBroker,
+                                                          out TransformQvvs parentTransform)
             => LocalTransformFrom(handle,
-                                  tickedWorldTransform.ToUnticked(),
-                                  ref TickedEntityManagerAccess.From(ref entityManager),
-                                  ref TickedEntityManagerAccess.From(ref entityManager),
+                                  in worldTransform,
+                                  ref ComponentBrokerAccess.From(ref componentBroker),
+                                  ref ComponentBrokerAccess.From(ref componentBroker),
                                   out parentTransform);
+
+            /// <summary>
+            /// Computes the local transform of the entity. If the entity does not have a parent, then this
+            /// is identical to the WorldTransform without stretch.
+            /// </summary>
+            /// <param name="handle">The handle of the entity within the hierarchy, often obtained from the RootReference component</param>
+            /// <param name="worldTransform">The WorldTransform of the entity possessing the RootReference, obtained from chunk iteration</param>
+            /// <param name="key">A key to ensure the hierarchy is safe to access</param>
+            /// <param name="componentBroker">A ComponentBroker with read access to EntityInHierarchy, EntityInHierarchyCleanup, and WorldTransform</param>
+            /// <param name="parentTransform">The parent's world-space transform for convenience, identity if there was no parent</param>
+            /// <returns>The local position, rotation, and uniform scale of the entity</returns>
+            public static TransformQvs LocalTransformFrom(EntityInHierarchyHandle handle,
+                                                          in WorldTransform worldTransform,
+                                                          TransformsKey key,
+                                                          ref ComponentBroker componentBroker,
+                                                          out TransformQvvs parentTransform)
+            {
+                key.Validate(handle.root.entity);
+                return LocalTransformFrom(handle,
+                                          in worldTransform,
+                                          ref ComponentBrokerParallelAccess.From(ref componentBroker),
+                                          ref ComponentBrokerParallelAccess.From(ref componentBroker),
+                                          out parentTransform);
+            }
 
             /// <summary>
             /// Computes the local transform of the entity. If the entity does not have a parent, then this
@@ -66,6 +90,68 @@ namespace Latios.Transforms
                                   ref EsilAlive.From(ref entityStorageInfoLookup),
                                   ref LookupWorldTransform.From(ref worldTransformLookupRO),
                                   out parentTransform);
+
+            /// <summary>
+            /// Computes the ticked local transform of the entity. If the entity does not have a parent, then this
+            /// is identical to the TickedWorldTransform without stretch.
+            /// </summary>
+            /// <param name="handle">The handle of the entity within the hierarchy, often obtained from the RootReference component</param>
+            /// <param name="tickedWorldTransform">The TickedWorldTransform of the entity possessing the RootReference, obtained from chunk iteration</param>
+            /// <param name="entityManager">The EntityManager which manages the entity</param>
+            /// <param name="parentTransform">The parent's world-space transform for convenience, identity if there was no parent</param>
+            /// <returns>The local position, rotation, and uniform scale of the entity</returns>
+            public static TransformQvs TickedLocalTransformFrom(EntityInHierarchyHandle handle,
+                                                                in TickedWorldTransform tickedWorldTransform,
+                                                                EntityManager entityManager,
+                                                                out TransformQvvs parentTransform)
+            => LocalTransformFrom(handle,
+                                  tickedWorldTransform.ToUnticked(),
+                                  ref TickedEntityManagerAccess.From(ref entityManager),
+                                  ref TickedEntityManagerAccess.From(ref entityManager),
+                                  out parentTransform);
+
+            /// <summary>
+            /// Computes the ticked local transform of the entity. If the entity does not have a parent, then this
+            /// is identical to the TickedWorldTransform without stretch.
+            /// </summary>
+            /// <param name="handle">The handle of the entity within the hierarchy, often obtained from the RootReference component</param>
+            /// <param name="worldTransform">The TickedWorldTransform of the entity possessing the RootReference, obtained from chunk iteration</param>
+            /// <param name="componentBroker">A ComponentBroker with read access to EntityInHierarchy, EntityInHierarchyCleanup, and WorldTransform</param>
+            /// <param name="parentTransform">The parent's world-space transform for convenience, identity if there was no parent</param>
+            /// <returns>The local position, rotation, and uniform scale of the entity</returns>
+            public static TransformQvs TickedLocalTransformFrom(EntityInHierarchyHandle handle,
+                                                                in WorldTransform worldTransform,
+                                                                ref ComponentBroker componentBroker,
+                                                                out TransformQvvs parentTransform)
+            => LocalTransformFrom(handle,
+                                  in worldTransform,
+                                  ref TickedComponentBrokerAccess.From(ref componentBroker),
+                                  ref TickedComponentBrokerAccess.From(ref componentBroker),
+                                  out parentTransform);
+
+            /// <summary>
+            /// Computes the ticked local transform of the entity. If the entity does not have a parent, then this
+            /// is identical to the TickedWorldTransform without stretch.
+            /// </summary>
+            /// <param name="handle">The handle of the entity within the hierarchy, often obtained from the RootReference component</param>
+            /// <param name="worldTransform">The TickedWorldTransform of the entity possessing the RootReference, obtained from chunk iteration</param>
+            /// <param name="key">A key to ensure the hierarchy is safe to access</param>
+            /// <param name="componentBroker">A ComponentBroker with read access to EntityInHierarchy, EntityInHierarchyCleanup, and WorldTransform</param>
+            /// <param name="parentTransform">The parent's world-space transform for convenience, identity if there was no parent</param>
+            /// <returns>The local position, rotation, and uniform scale of the entity</returns>
+            public static TransformQvs TickedLocalTransformFrom(EntityInHierarchyHandle handle,
+                                                                in WorldTransform worldTransform,
+                                                                TransformsKey key,
+                                                                ref ComponentBroker componentBroker,
+                                                                out TransformQvvs parentTransform)
+            {
+                key.Validate(handle.root.entity);
+                return LocalTransformFrom(handle,
+                                          in worldTransform,
+                                          ref TickedComponentBrokerParallelAccess.From(ref componentBroker),
+                                          ref TickedComponentBrokerParallelAccess.From(ref componentBroker),
+                                          out parentTransform);
+            }
 
             /// <summary>
             /// Computes the ticked local transform of the entity. If the entity does not have a parent, then this

@@ -1,5 +1,6 @@
 using System;
 using Latios.Unsafe;
+using static UnityEngine.Rendering.VirtualTexturing.Debugging;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
@@ -19,6 +20,7 @@ namespace Latios.Transforms
                     LocalScaleSet,
                     LocalTransformSet,
                     StretchSet,
+                    LocalTransformAndStretchSet,
                     WorldPositionSet,
                     WorldRotationSet,
                     WorldScaleSet,
@@ -199,21 +201,21 @@ namespace Latios.Transforms
                     {
                         var localTransform      = LocalTransformFrom(handle, ref aliveLookup, ref transformLookup, out var parentTransform);
                         localTransform.position = writeData.position;
-                        qvvs.mul(ref transform, in parentTransform, in localTransform);
+                        qvvs.mulclean(ref transform, in parentTransform, in localTransform);
                         break;
                     }
                     case WriteCommand.WriteType.LocalRotationSet:
                     {
                         var localTransform      = LocalTransformFrom(handle, ref aliveLookup, ref transformLookup, out var parentTransform);
                         localTransform.rotation = writeData.rotation;
-                        qvvs.mul(ref transform, in parentTransform, in localTransform);
+                        qvvs.mulclean(ref transform, in parentTransform, in localTransform);
                         break;
                     }
                     case WriteCommand.WriteType.LocalScaleSet:
                     {
                         var localTransform   = LocalTransformFrom(handle, ref aliveLookup, ref transformLookup, out var parentTransform);
                         localTransform.scale = writeData.scale;
-                        qvvs.mul(ref transform, in parentTransform, in localTransform);
+                        qvvs.mulclean(ref transform, in parentTransform, in localTransform);
                         break;
                     }
                     case WriteCommand.WriteType.LocalTransformSet:
@@ -222,12 +224,22 @@ namespace Latios.Transforms
                         localTransform.position = writeData.position;
                         localTransform.rotation = writeData.rotation;
                         localTransform.scale    = writeData.scale;
-                        qvvs.mul(ref transform, in parentTransform, in localTransform);
+                        qvvs.mulclean(ref transform, in parentTransform, in localTransform);
                         break;
                     }
                     case WriteCommand.WriteType.StretchSet:
                         transform.stretch = writeData.stretch;
                         break;
+                    case WriteCommand.WriteType.LocalTransformAndStretchSet:
+                    {
+                        var localTransform      = LocalTransformFrom(handle, ref aliveLookup, ref transformLookup, out var parentTransform);
+                        localTransform.position = writeData.position;
+                        localTransform.rotation = writeData.rotation;
+                        localTransform.scale    = writeData.scale;
+                        transform.stretch       = writeData.stretch;
+                        qvvs.mulclean(ref transform, in parentTransform, in localTransform);
+                        break;
+                    }
                     case WriteCommand.WriteType.WorldPositionSet:
                         transform.position = writeData.position;
                         break;
@@ -244,21 +256,21 @@ namespace Latios.Transforms
                     {
                         var localTransform       = LocalTransformFrom(handle, ref aliveLookup, ref transformLookup, out var parentTransform);
                         localTransform.position += writeData.position;
-                        qvvs.mul(ref transform, in parentTransform, in localTransform);
+                        qvvs.mulclean(ref transform, in parentTransform, in localTransform);
                         break;
                     }
                     case WriteCommand.WriteType.LocalRotationDelta:
                     {
                         var localTransform      = LocalTransformFrom(handle, ref aliveLookup, ref transformLookup, out var parentTransform);
-                        localTransform.rotation = math.mul(writeData.rotation, localTransform.rotation);
-                        qvvs.mul(ref transform, in parentTransform, in localTransform);
+                        localTransform.rotation = math.normalize(math.mul(writeData.rotation, localTransform.rotation));
+                        qvvs.mulclean(ref transform, in parentTransform, in localTransform);
                         break;
                     }
                     case WriteCommand.WriteType.LocalTransformDelta:
                     {
                         var localTransform = LocalTransformFrom(handle, ref aliveLookup, ref transformLookup, out var parentTransform);
                         qvvs.mul(ref transform, in writeData, in localTransform);
-                        transform = qvvs.mul(in parentTransform, transform);
+                        transform = qvvs.mulclean(in parentTransform, transform);
                         break;
                     }
                     case WriteCommand.WriteType.LocalInverseTransformDelta:
@@ -266,7 +278,7 @@ namespace Latios.Transforms
                         var localTransform     = LocalTransformFrom(handle, ref aliveLookup, ref transformLookup, out var parentTransform);
                         var localTransformQvvs = new TransformQvvs(localTransform.position, localTransform.rotation, localTransform.scale, transform.stretch, transform.worldIndex);
                         localTransformQvvs     = qvvs.inversemulqvvs(in writeData, in localTransformQvvs);
-                        transform              = qvvs.mul(in parentTransform, localTransformQvvs);
+                        transform              = qvvs.mulclean(in parentTransform, localTransformQvvs);
                         break;
                     }
                     case WriteCommand.WriteType.StretchDelta:
@@ -276,16 +288,16 @@ namespace Latios.Transforms
                         transform.position += writeData.position;
                         break;
                     case WriteCommand.WriteType.WorldRotationDelta:
-                        transform.rotation = math.mul(writeData.rotation, transform.rotation);
+                        transform.rotation = math.normalize(math.mul(writeData.rotation, transform.rotation));
                         break;
                     case WriteCommand.WriteType.ScaleDelta:
                         transform.scale *= writeData.scale;
                         break;
                     case WriteCommand.WriteType.WorldTransformDelta:
-                        transform = qvvs.mul(writeData, transform);
+                        transform = qvvs.mulclean(writeData, transform);
                         break;
                     case WriteCommand.WriteType.WorldInverseTransformDelta:
-                        transform = qvvs.inversemulqvvs(writeData, transform);
+                        transform = qvvs.inversemulqvvsclean(writeData, transform);
                         break;
                     case WriteCommand.WriteType.CopyParentParentChanged:
                     {
@@ -312,21 +324,21 @@ namespace Latios.Transforms
                     {
                         var localTransform      = qvvs.inversemul(in parentTransform, in transform);
                         localTransform.position = writeData.position;
-                        qvvs.mul(ref transform, in parentTransform, in localTransform);
+                        qvvs.mulclean(ref transform, in parentTransform, in localTransform);
                         break;
                     }
                     case WriteCommand.WriteType.LocalRotationSet:
                     {
                         var localTransform      = qvvs.inversemul(in parentTransform, in transform);
                         localTransform.rotation = writeData.rotation;
-                        qvvs.mul(ref transform, in parentTransform, in localTransform);
+                        qvvs.mulclean(ref transform, in parentTransform, in localTransform);
                         break;
                     }
                     case WriteCommand.WriteType.LocalScaleSet:
                     {
                         var localTransform   = qvvs.inversemul(in parentTransform, in transform);
                         localTransform.scale = writeData.scale;
-                        qvvs.mul(ref transform, in parentTransform, in localTransform);
+                        qvvs.mulclean(ref transform, in parentTransform, in localTransform);
                         break;
                     }
                     case WriteCommand.WriteType.LocalTransformSet:
@@ -335,12 +347,22 @@ namespace Latios.Transforms
                         localTransform.position = writeData.position;
                         localTransform.rotation = writeData.rotation;
                         localTransform.scale    = writeData.scale;
-                        qvvs.mul(ref transform, in parentTransform, in localTransform);
+                        qvvs.mulclean(ref transform, in parentTransform, in localTransform);
                         break;
                     }
                     case WriteCommand.WriteType.StretchSet:
                         transform.stretch = writeData.stretch;
                         break;
+                    case WriteCommand.WriteType.LocalTransformAndStretchSet:
+                    {
+                        var localTransform      = qvvs.inversemul(in parentTransform, in transform);
+                        localTransform.position = writeData.position;
+                        localTransform.rotation = writeData.rotation;
+                        localTransform.scale    = writeData.scale;
+                        transform.stretch       = writeData.stretch;
+                        qvvs.mulclean(ref transform, in parentTransform, in localTransform);
+                        break;
+                    }
                     case WriteCommand.WriteType.WorldPositionSet:
                         transform.position = writeData.position;
                         break;
@@ -357,21 +379,21 @@ namespace Latios.Transforms
                     {
                         var localTransform       = qvvs.inversemul(in parentTransform, in transform);
                         localTransform.position += writeData.position;
-                        qvvs.mul(ref transform, in parentTransform, in localTransform);
+                        qvvs.mulclean(ref transform, in parentTransform, in localTransform);
                         break;
                     }
                     case WriteCommand.WriteType.LocalRotationDelta:
                     {
                         var localTransform      = qvvs.inversemul(in parentTransform, in transform);
-                        localTransform.rotation = math.mul(writeData.rotation, localTransform.rotation);
-                        qvvs.mul(ref transform, in parentTransform, in localTransform);
+                        localTransform.rotation = math.normalize(math.mul(writeData.rotation, localTransform.rotation));
+                        qvvs.mulclean(ref transform, in parentTransform, in localTransform);
                         break;
                     }
                     case WriteCommand.WriteType.LocalTransformDelta:
                     {
                         var localTransform = qvvs.inversemul(in parentTransform, in transform);
                         qvvs.mul(ref transform, in writeData, in localTransform);
-                        transform = qvvs.mul(in parentTransform, transform);
+                        transform = qvvs.mulclean(in parentTransform, transform);
                         break;
                     }
                     case WriteCommand.WriteType.LocalInverseTransformDelta:
@@ -379,7 +401,7 @@ namespace Latios.Transforms
                         var localTransform     = qvvs.inversemul(in parentTransform, in transform);
                         var localTransformQvvs = new TransformQvvs(localTransform.position, localTransform.rotation, localTransform.scale, transform.stretch, transform.worldIndex);
                         localTransformQvvs     = qvvs.inversemulqvvs(in writeData, in localTransformQvvs);
-                        transform              = qvvs.mul(in parentTransform, localTransformQvvs);
+                        transform              = qvvs.mulclean(in parentTransform, localTransformQvvs);
                         break;
                     }
                     case WriteCommand.WriteType.StretchDelta:
@@ -389,16 +411,16 @@ namespace Latios.Transforms
                         transform.position += writeData.position;
                         break;
                     case WriteCommand.WriteType.WorldRotationDelta:
-                        transform.rotation = math.mul(writeData.rotation, transform.rotation);
+                        transform.rotation = math.normalize(math.mul(writeData.rotation, transform.rotation));
                         break;
                     case WriteCommand.WriteType.ScaleDelta:
                         transform.scale *= writeData.scale;
                         break;
                     case WriteCommand.WriteType.WorldTransformDelta:
-                        transform = qvvs.mul(writeData, transform);
+                        transform = qvvs.mulclean(writeData, transform);
                         break;
                     case WriteCommand.WriteType.WorldInverseTransformDelta:
-                        transform = qvvs.inversemulqvvs(writeData, transform);
+                        transform = qvvs.inversemulqvvsclean(writeData, transform);
                         break;
                     case WriteCommand.WriteType.CopyParentParentChanged:
                     {
@@ -431,7 +453,7 @@ namespace Latios.Transforms
                 var     originalWorldTransform = worldTransform;
                 var     parentTransform        = oldNewWorldTransform.newTransform;
                 var     localTransform         = qvvs.inversemul(oldNewWorldTransform.oldTransform, originalWorldTransform);
-                qvvs.mul(ref worldTransform, in parentTransform, in localTransform);
+                qvvs.mulclean(ref worldTransform, in parentTransform, in localTransform);
 
                 if ((flags & InheritanceFlags.WorldRotation) == InheritanceFlags.WorldRotation)
                     worldTransform.rotation = originalWorldTransform.rotation;

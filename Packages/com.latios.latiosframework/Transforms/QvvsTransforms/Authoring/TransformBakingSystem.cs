@@ -491,7 +491,7 @@ namespace Latios.Transforms.Authoring.Systems
                         rotation = transformAuthoring.LocalRotation,
                         scale    = scale
                     };
-                    qvvs.mul(ref worldTransform, parentWorldTransform, localTransform);
+                    qvvs.mulclean(ref worldTransform, parentWorldTransform, localTransform);
                     return worldTransform;
                 }
             }
@@ -663,13 +663,13 @@ namespace Latios.Transforms.Authoring.Systems
             TransformQvvs ComputeWorldTransform(Entity child, Entity parent, TransformQvvs parentTransform)
             {
                 if (bakedLocalTransformOverrideLookup.TryGetComponent(child, out var overrideLocal))
-                    return qvvs.mul(parentTransform, overrideLocal.localTransform);
+                    return qvvs.mulclean(parentTransform, overrideLocal.localTransform);
 
                 var transformAuthoring = transformAuthoringLookup[child];
                 TransformBakeUtils.GetScaleAndStretch(transformAuthoring.LocalScale, out var scale, out var stretch);
                 var workingTransform = new TransformQvvs(transformAuthoring.LocalPosition, transformAuthoring.LocalRotation, scale, stretch);
                 if (parent == transformAuthoring.AuthoringParent)
-                    return qvvs.mul(parentTransform, workingTransform);
+                    return qvvs.mulclean(parentTransform, workingTransform);
 
                 var nextParent = transformAuthoring.AuthoringParent;
                 while (nextParent != parent)
@@ -677,10 +677,10 @@ namespace Latios.Transforms.Authoring.Systems
                     var intermediateAuthoring = transformAuthoringLookup[nextParent];
                     TransformBakeUtils.GetScaleAndStretch(intermediateAuthoring.LocalScale, out var interScale, out var interStretch);
                     var interTransform = new TransformQvvs(intermediateAuthoring.LocalPosition, intermediateAuthoring.LocalRotation, interScale, interStretch);
-                    workingTransform   = qvvs.mul(interTransform, workingTransform);
+                    workingTransform   = qvvs.mulclean(interTransform, workingTransform);
                     nextParent         = transformAuthoring.AuthoringParent;
                 }
-                return qvvs.mul(parentTransform, workingTransform);
+                return qvvs.mulclean(parentTransform, workingTransform);
             }
 
             struct EnqueuedChild
