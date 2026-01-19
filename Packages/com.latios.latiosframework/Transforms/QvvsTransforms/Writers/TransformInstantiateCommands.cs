@@ -47,6 +47,8 @@ namespace Latios.Transforms
     /// An IInstantiateCommand to set the parent of the instantiated entity.
     /// This does not change the WorldTransform or TickedWorldTransform unless the inheritanceFlags
     /// requests CopyParentTransform.
+    /// If the target parent entity no longer exists during playback, the instantiated entity will
+    /// be immediately destroyed again.
     /// </summary>
     [BurstCompile]
     public struct ParentCommand : IInstantiateCommand
@@ -84,6 +86,8 @@ namespace Latios.Transforms
     /// An IInstantiateCommand to set the parent of the instantiated entity and set a new local transform
     /// for the instantiated entity. This sets both the WorldTransform and TickedWorldTransform depending
     /// on which are present.
+    /// If the target parent entity no longer exists during playback, the instantiated entity will
+    /// be immediately destroyed again.
     /// </summary>
     [BurstCompile]
     public struct ParentAndLocalTransformCommand : IInstantiateCommand

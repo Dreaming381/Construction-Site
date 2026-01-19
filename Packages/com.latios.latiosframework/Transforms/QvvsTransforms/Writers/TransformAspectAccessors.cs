@@ -10,10 +10,10 @@ namespace Latios.Transforms
     /// <summary>
     /// A struct which should be a field of a single-threaded job. It can provide TransformAspect instances for the context of such a job.
     /// </summary>
-    public unsafe struct TransformAccessLookup
+    public unsafe struct TransformAspectLookup
     {
         /* Construct Snippet
-           new TransformAccessLookup(SystemAPI.GetComponentLookup<WorldTransform>(false),
+           new TransformAspectLookup(SystemAPI.GetComponentLookup<WorldTransform>(false),
                                   SystemAPI.GetComponentLookup<RootReference>(true),
                                   SystemAPI.GetBufferLookup<EntityInHierarchy>(true),
                                   SystemAPI.GetBufferLookup<EntityInHierarchyCleanup>(true),
@@ -25,7 +25,7 @@ namespace Latios.Transforms
         [ReadOnly] BufferLookup<EntityInHierarchyCleanup> cleanupLookup;
         [ReadOnly] EntityStorageInfoLookup                esil;
 
-        public TransformAccessLookup(ComponentLookup<WorldTransform>        worldTransformLookup,
+        public TransformAspectLookup(ComponentLookup<WorldTransform>        worldTransformLookup,
                                      ComponentLookup<RootReference>         rootReferenceLookupRO,
                                      BufferLookup<EntityInHierarchy>        entityInHierarchyLookupRO,
                                      BufferLookup<EntityInHierarchyCleanup> entityInHierarchyCleanupRO,
@@ -77,12 +77,13 @@ namespace Latios.Transforms
     /// A struct which should be a field of a parallel IJobChunk, IJobEntityChunkBeginEnd, or equivalent.
     /// It can provide TransformAspect for any root or solo entities with thread-safe guarantees.
     /// For each chunk, call SetupChunk(). Then use the indexer with the index of the entity within the chunk to get the TransformAspect.
+    /// If used in an IJobEntity, make sure to include WorldTransform in your query!
     /// </summary>
-    public unsafe struct TransformAccessRootHandle
+    public unsafe struct TransformAspectRootHandle
     {
         /* Construct Snippet
-           new TransformAccessRootHandle(SystemAPI.GetComponentLookup<WorldTransform>(false),
-                                      SystemAPI.GetBufferLookup<EntityInHierarchy>(true),
+           new TransformAspectRootHandle(SystemAPI.GetComponentLookup<WorldTransform>(false),
+                                      SystemAPI.GetBufferTypeHandle<EntityInHierarchy>(true),
                                       SystemAPI.GetEntityStorageInfoLookup())
          */
 
@@ -99,7 +100,7 @@ namespace Latios.Transforms
         [NativeDisableUnsafePtrRestriction] ThreadCache* cache;
         HasChecker<RootReference>                        rootRefChecker;
 
-        public TransformAccessRootHandle(ComponentLookup<WorldTransform>     worldTransformLookupRW,
+        public TransformAspectRootHandle(ComponentLookup<WorldTransform>     worldTransformLookupRW,
                                          BufferTypeHandle<EntityInHierarchy> entityInHierarchyHandleRO,
                                          EntityStorageInfoLookup entityStorageInfoLookup)
         {
