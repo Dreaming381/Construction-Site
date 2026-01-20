@@ -622,15 +622,20 @@ namespace Latios.Transforms.Authoring.Systems
                     EnqueueChildren(current.children, thisIndex);
                 }
 
+                int previousOffset = childrenOfRoot.Length;
                 for (int i = 1; i < computedTransforms.Length; i++)
                 {
-                    var targetEntity                  = buffer[i].entity;
-                    rootReferenceLookup[targetEntity] = new RootReference
+                    ref var element = ref buffer.ElementAt(i);
+                    if (element.firstChildIndex < 0)
+                        element.m_firstChildIndex = previousOffset;
+                    else
+                        previousOffset                  = element.firstChildIndex + element.childCount;
+                    rootReferenceLookup[element.entity] = new RootReference
                     {
                         m_indexInHierarchy = i,
                         m_rootEntity       = root
                     };
-                    worldTransformLookup[targetEntity] = new WorldTransform { worldTransform = computedTransforms[i] };
+                    worldTransformLookup[element.entity] = new WorldTransform { worldTransform = computedTransforms[i] };
                 }
             }
 
