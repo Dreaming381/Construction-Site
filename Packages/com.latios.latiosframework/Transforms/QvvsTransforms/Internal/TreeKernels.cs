@@ -1,0 +1,537 @@
+using System;
+using Latios.Unsafe;
+using Unity.Collections;
+using Unity.Collections.LowLevel.Unsafe;
+using Unity.Entities;
+using Unity.Mathematics;
+using Unity.Transforms;
+
+namespace Latios.Transforms
+{
+    internal static unsafe class TreeKernels
+    {
+        #region Classification
+        public struct TreeClassification
+        {
+            public enum TreeRole : byte
+            {
+                Solo,
+                Root,
+                InteriorNoChildren,
+                InteriorWithChildren
+            }
+
+            public Entity   root;
+            public int      indexInHierarchy;
+            public TreeRole role;
+            public bool     isRootAlive;
+        }
+
+        public static TreeClassification ClassifyAlive(EntityManager em, Entity entity)
+        {
+            TreeClassification result = default;
+            if (em.HasComponent<RootReference>(entity))
+            {
+                var rootRef             = em.GetComponentData<RootReference>(entity);
+                result.root             = rootRef.rootEntity;
+                result.indexInHierarchy = rootRef.indexInHierarchy;
+                if (em.HasBuffer<EntityInHierarchy>(rootRef.rootEntity))
+                {
+                    var children       = em.GetBuffer<EntityInHierarchy>(rootRef.rootEntity, true)[rootRef.indexInHierarchy].childCount;
+                    result.role        = children != 0 ? TreeClassification.TreeRole.InteriorWithChildren : TreeClassification.TreeRole.InteriorNoChildren;
+                    result.isRootAlive = true;
+                }
+                else
+                {
+                    var children       = em.GetBuffer<EntityInHierarchyCleanup>(rootRef.rootEntity, true)[rootRef.indexInHierarchy].entityInHierarchy.childCount;
+                    result.role        = children != 0 ? TreeClassification.TreeRole.InteriorWithChildren : TreeClassification.TreeRole.InteriorNoChildren;
+                    result.isRootAlive = false;
+                }
+            }
+            else if (em.HasBuffer<EntityInHierarchy>(entity))
+                result.role = TreeClassification.TreeRole.Root;
+            else
+                result.role = TreeClassification.TreeRole.Solo;
+            return result;
+        }
+
+        public static TreeClassification GlassifyAlive(ref ComponentLookup<RootReference>         rootRefLookupRO,
+                                                       ref BufferLookup<EntityInHierarchy>        hierarchyLookupRO,
+                                                       ref BufferLookup<EntityInHierarchyCleanup> cleanupLookupRO,
+                                                       Entity entity)
+        {
+            TreeClassification result = default;
+            if (rootRefLookupRO.TryGetComponent(entity, out var rootRef))
+            {
+                result.root             = rootRef.rootEntity;
+                result.indexInHierarchy = rootRef.indexInHierarchy;
+                if (hierarchyLookupRO.TryGetBuffer(rootRef.rootEntity, out var hierarchy))
+                {
+                    var children       = hierarchy[rootRef.indexInHierarchy].childCount;
+                    result.role        = children != 0 ? TreeClassification.TreeRole.InteriorWithChildren : TreeClassification.TreeRole.InteriorNoChildren;
+                    result.isRootAlive = true;
+                }
+                else
+                {
+                    var children       = cleanupLookupRO[rootRef.rootEntity][rootRef.indexInHierarchy].entityInHierarchy.childCount;
+                    result.role        = children != 0 ? TreeClassification.TreeRole.InteriorWithChildren : TreeClassification.TreeRole.InteriorNoChildren;
+                    result.isRootAlive = false;
+                }
+            }
+            else if (hierarchyLookupRO.HasBuffer(entity))
+                result.role = TreeClassification.TreeRole.Root;
+            else
+                result.role = TreeClassification.TreeRole.Solo;
+            return result;
+        }
+        #endregion
+
+        #region Hierarchy Buffer Ops
+        public static Span<EntityInHierarchy> CopyHierarchy(ref ThreadStackAllocator tsa, in ReadOnlySpan<EntityInHierarchy> hierarchy)
+        {
+            var span = tsa.AllocateAsSpan<EntityInHierarchy>(hierarchy.Length);
+            hierarchy.CopyTo(span);
+            return span;
+        }
+
+        public static Span<Entity> CopyHierarchyEntities(ref ThreadStackAllocator tsa, in ReadOnlySpan<EntityInHierarchy> hierarchy)
+        {
+            var span = tsa.AllocateAsSpan<Entity>(hierarchy.Length);
+            for (int i = 0; i < hierarchy.Length; i++)
+                span[i] = hierarchy[i].entity;
+            return span;
+        }
+
+        public static Span<EntityInHierarchy> ExtractSubtree(ref ThreadStackAllocator tsa, in ReadOnlySpan<EntityInHierarchy> hierarchy, int subtreeRootIndex)
+        {
+            var maxDescendantsCount = hierarchy.Length - subtreeRootIndex;
+            var extractionList      = new UnsafeList<EntityInHierarchy>(tsa.Allocate<EntityInHierarchy>(maxDescendantsCount), maxDescendantsCount);
+
+            extractionList.Clear();  // The list initializer we are using sets both capacity and length.
+
+            //descendantsToMove.Add((child, -1));
+            extractionList.Add(new EntityInHierarchy
+            {
+                m_descendantEntity = hierarchy[subtreeRootIndex].entity,
+                m_parentIndex      = -1,
+                m_childCount       = hierarchy[subtreeRootIndex].childCount,
+                m_firstChildIndex  = 1,
+                m_flags            = default
+            });
+            // The root is the first level. For each subsequent level, we iterate the entities added during the previous level.
+            // And then we add their children.
+            int firstParentInLevel               = 0;
+            int parentCountInLevel               = 1;
+            int firstParentHierarchyIndexInLevel = subtreeRootIndex;
+            while (parentCountInLevel > 0)
+            {
+                var firstParentInNextLevel               = extractionList.Length;
+                var parentCountInNextLevel               = 0;
+                int firstParentHierarchyIndexInNextLevel = 0;
+                for (int parentIndex = 0; parentIndex < parentCountInLevel; parentIndex++)
+                {
+                    var dstParentIndex    = parentIndex + firstParentInLevel;
+                    var parentInHierarchy = hierarchy[firstParentHierarchyIndexInLevel + parentIndex];
+                    if (parentIndex == 0)
+                        firstParentHierarchyIndexInNextLevel  = parentInHierarchy.firstChildIndex;
+                    parentCountInNextLevel                   += parentInHierarchy.childCount;
+                    for (int i = 0; i < parentInHierarchy.childCount; i++)
+                    {
+                        var oldElement               = hierarchy[parentInHierarchy.firstChildIndex + i];
+                        oldElement.m_firstChildIndex = int.MaxValue;
+                        oldElement.m_parentIndex     = dstParentIndex;
+                        extractionList.Add(oldElement);
+                    }
+                }
+                firstParentInLevel               = firstParentInNextLevel;
+                parentCountInLevel               = parentCountInNextLevel;
+                firstParentHierarchyIndexInLevel = firstParentHierarchyIndexInNextLevel;
+            }
+
+            var result = new Span<EntityInHierarchy>(extractionList.Ptr, extractionList.Length);
+
+            for (int i = 1; i < result.Length; i++)
+            {
+                ref var child           = ref result[i];
+                ref var firstChildIndex = ref result[child.parentIndex].m_firstChildIndex;
+                firstChildIndex         = math.min(firstChildIndex, i);
+                var previous            = result[i - 1];
+                child.m_firstChildIndex = previous.firstChildIndex + previous.childCount;
+            }
+            return result;
+        }
+
+        public static void BuildOriginalParentChildHierarchy(ref DynamicBuffer<EntityInHierarchy> hierarchy, Entity parent, Entity child, InheritanceFlags flags)
+        {
+            hierarchy.Add(new EntityInHierarchy
+            {
+                m_childCount       = 1,
+                m_descendantEntity = parent,
+                m_firstChildIndex  = 1,
+                m_flags            = InheritanceFlags.Normal,
+                m_parentIndex      = -1
+            });
+            hierarchy.Add(new EntityInHierarchy
+            {
+                m_childCount       = 0,
+                m_descendantEntity = child,
+                m_firstChildIndex  = 2,
+                m_flags            = flags,
+                m_parentIndex      = 0
+            });
+        }
+
+        public static int InsertSoloEntityIntoHierarchy(ref DynamicBuffer<EntityInHierarchy> hierarchy, int parentIndex, Entity soloChild, InheritanceFlags flags)
+        {
+            ref var newParentInHierarchy = ref hierarchy.ElementAt(parentIndex);
+            var     insertionPoint       = newParentInHierarchy.firstChildIndex + newParentInHierarchy.childCount;
+            newParentInHierarchy.m_childCount++;
+            if (insertionPoint == hierarchy.Length)
+            {
+                var hierarchyArray = hierarchy.AsNativeArray();
+                for (int i = parentIndex + 1; i < insertionPoint; i++)
+                {
+                    var parentElement = hierarchyArray[i];
+                    parentElement.m_firstChildIndex++;
+                    hierarchyArray[i] = parentElement;
+                }
+                hierarchy.Add(new EntityInHierarchy
+                {
+                    m_childCount       = 0,
+                    m_descendantEntity = soloChild,
+                    m_firstChildIndex  = insertionPoint + 1,
+                    m_flags            = flags,
+                    m_parentIndex      = parentIndex
+                });
+            }
+            else
+            {
+                var newFirstChildIndex = hierarchy[insertionPoint].firstChildIndex;
+                hierarchy.Insert(insertionPoint, new EntityInHierarchy
+                {
+                    m_childCount       = 0,
+                    m_descendantEntity = soloChild,
+                    m_firstChildIndex  = newFirstChildIndex,
+                    m_flags            = flags,
+                    m_parentIndex      = parentIndex
+                });
+                var hierarchyArray = hierarchy.AsNativeArray().AsSpan();
+                for (int i = parentIndex + 1; i < hierarchyArray.Length; i++)
+                {
+                    ref var element = ref hierarchyArray[i];
+                    element.m_firstChildIndex++;
+                    if (element.parentIndex >= insertionPoint)
+                        element.m_parentIndex++;
+                }
+            }
+            return insertionPoint;
+        }
+
+        public static void BuildOriginalParentWithDescendantHierarchy(ref DynamicBuffer<EntityInHierarchy> hierarchy,
+                                                                      Entity parent,
+                                                                      ReadOnlySpan<EntityInHierarchy>      descendants,
+                                                                      InheritanceFlags flags)
+        {
+            hierarchy.EnsureCapacity(descendants.Length + 1);
+            hierarchy.Add(new EntityInHierarchy
+            {
+                m_childCount       = 1,
+                m_descendantEntity = parent,
+                m_firstChildIndex  = 1,
+                m_flags            = InheritanceFlags.Normal,
+                m_parentIndex      = -1
+            });
+            for (int i = 0; i < descendants.Length; i++)
+            {
+                hierarchy.Add(new EntityInHierarchy
+                {
+                    m_childCount       = descendants[i].childCount,
+                    m_descendantEntity = descendants[i].entity,
+                    m_firstChildIndex  = descendants[i].firstChildIndex + 1,
+                    m_flags            = descendants[i].m_flags,
+                    m_parentIndex      = descendants[i].parentIndex + 1
+                });
+            }
+            hierarchy.ElementAt(1).m_flags = flags;
+        }
+
+        public static void InsertSubtreeIntoHierarchy(ref DynamicBuffer<EntityInHierarchy> hierarchy,
+                                                      int parentIndex,
+                                                      ReadOnlySpan<EntityInHierarchy>      subtreeToInsert,
+                                                      InheritanceFlags flags)
+        {
+            var hierarchyOriginalLength  = hierarchy.Length;
+            hierarchy.Length            += subtreeToInsert.Length;
+            ref var parentInHierarchy    = ref hierarchy.ElementAt(parentIndex);
+            var     insertionPoint       = parentInHierarchy.firstChildIndex + parentInHierarchy.childCount;
+            parentInHierarchy.m_childCount++;
+            var hierarchyArray = hierarchy.AsNativeArray().AsSpan();
+            if (insertionPoint == hierarchyOriginalLength)
+            {
+                // We are appending the new child to the end, which means we can just copy the whole hierarchy.
+                // But first, we need to push any previous firstChildIndex values one past.
+                for (int i = parentIndex + 1; i < hierarchyOriginalLength; i++)
+                {
+                    var parentElement = hierarchyArray[i];
+                    parentElement.m_firstChildIndex++;
+                    hierarchyArray[i] = parentElement;
+                }
+                var childElement                = subtreeToInsert[0];
+                childElement.m_parentIndex      = parentIndex;
+                childElement.m_firstChildIndex += insertionPoint;
+                childElement.m_flags            = flags;
+                hierarchyArray[insertionPoint]  = childElement;
+                for (int i = 1; i < subtreeToInsert.Length; i++)
+                {
+                    childElement                        = subtreeToInsert[i];
+                    childElement.m_parentIndex         += insertionPoint;
+                    childElement.m_firstChildIndex     += insertionPoint;
+                    hierarchyArray[insertionPoint + i]  = childElement;
+                }
+            }
+            else
+            {
+                // Move elements starting at the insertion point to the back
+                for (int i = hierarchyOriginalLength - 1; i >= insertionPoint; i--)
+                {
+                    var src             = i;
+                    var dst             = src + subtreeToInsert.Length;
+                    hierarchyArray[dst] = hierarchyArray[src];
+                }
+
+                // Adjust first child index of parents preceeding the inserted child
+                int existingChildrenToAdd = 0;
+                for (int i = parentIndex + 1; i < insertionPoint; i++)
+                {
+                    var parentElement = hierarchyArray[i];
+                    parentElement.m_firstChildIndex++;
+                    existingChildrenToAdd += parentElement.childCount;
+                    hierarchyArray[i]      = parentElement;
+                }
+
+                // Add the new child
+                var newChildElement               = subtreeToInsert[0];
+                newChildElement.m_parentIndex     = parentIndex;
+                newChildElement.m_firstChildIndex = insertionPoint + 1 + existingChildrenToAdd;
+                newChildElement.m_flags           = flags;
+                int newChildrenToAdd              = newChildElement.childCount;
+                hierarchyArray[insertionPoint]    = newChildElement;
+
+                // Merge the hierarchies by alternating based on accumulated children batches
+                int existingChildrenParentShift = 0;
+                int existingChildrenChildShift  = 1 + newChildrenToAdd;
+                int existingChildRunningIndex   = insertionPoint + subtreeToInsert.Length;
+                int newChildrenLastAdded        = 1;
+                int newChildrenParentShift      = insertionPoint;
+                int newChildrenChildShift       = insertionPoint + existingChildrenToAdd;
+                int newChildRunningIndex        = 1;
+                int runningDst                  = insertionPoint + 1;
+
+                while (newChildrenToAdd + existingChildrenToAdd > 0)
+                {
+                    int nextExistingChildrenToAdd = 0;
+                    for (int i = 0; i < existingChildrenToAdd; i++)
+                    {
+                        var existingElement                = hierarchyArray[existingChildRunningIndex];
+                        existingElement.m_parentIndex     += existingChildrenParentShift;
+                        existingElement.m_firstChildIndex += existingChildrenChildShift;
+                        nextExistingChildrenToAdd         += existingElement.childCount;
+                        hierarchyArray[runningDst]         = existingElement;
+                        existingChildRunningIndex++;
+                        runningDst++;
+                    }
+                    newChildrenChildShift       += nextExistingChildrenToAdd;
+                    existingChildrenParentShift += newChildrenLastAdded;
+
+                    int nextNewChildrenToAdd = 0;
+                    for (int i = 0; i < newChildrenToAdd; i++)
+                    {
+                        var newElement                = subtreeToInsert[newChildRunningIndex];
+                        newElement.m_parentIndex     += newChildrenParentShift;
+                        newElement.m_firstChildIndex += newChildrenChildShift;
+                        nextNewChildrenToAdd         += newElement.childCount;
+                        hierarchyArray[runningDst]    = newElement;
+                        newChildRunningIndex++;
+                        runningDst++;
+                    }
+                    existingChildrenChildShift += nextNewChildrenToAdd;
+                    newChildrenParentShift     += existingChildrenToAdd;
+                    newChildrenLastAdded        = newChildrenToAdd;
+                    newChildrenToAdd            = nextNewChildrenToAdd;
+                    existingChildrenToAdd       = nextExistingChildrenToAdd;
+                }
+            }
+        }
+
+        public static void RemoveSoloFromHierarchy(ref DynamicBuffer<EntityInHierarchy> hierarchy, int indexToRemove)
+        {
+            var parentIndex = hierarchy[indexToRemove].parentIndex;
+            hierarchy.RemoveAt(indexToRemove);
+
+            var hierarchyArray = hierarchy.AsNativeArray().AsSpan();
+            hierarchyArray[parentIndex].m_childCount--;
+
+            for (int i = parentIndex + 1; i < hierarchyArray.Length; i++)
+            {
+                ref var element = ref hierarchyArray[i];
+                element.m_firstChildIndex--;
+                if (element.parentIndex > indexToRemove)
+                    element.m_parentIndex--;
+            }
+        }
+
+        public static void RemoveSubtreeFromHierarchy(ref ThreadStackAllocator parentTsa, ref DynamicBuffer<EntityInHierarchy> hierarchy, int subtreeRootIndex,
+                                                      ReadOnlySpan<EntityInHierarchy> extractedSubtree)
+        {
+            var tsa = parentTsa.CreateChildAllocator();
+
+            // Start by decreasing the old parent's child count
+            var oldHierarchyArray    = hierarchy.AsNativeArray().AsSpan();
+            var subtreeParentIndex   = oldHierarchyArray[subtreeRootIndex].parentIndex;
+            var oldParentInHierarchy = oldHierarchyArray[subtreeParentIndex];
+            oldParentInHierarchy.m_childCount--;
+            oldHierarchyArray[subtreeParentIndex] = oldParentInHierarchy;
+
+            // Next, offset any entity first child indices for entities that are prior to the removed child
+            for (int i = subtreeParentIndex + 1; i < subtreeRootIndex; i++)
+            {
+                var temp = oldHierarchyArray[i];
+                temp.m_firstChildIndex--;
+                oldHierarchyArray[i] = temp;
+            }
+
+            // Filter out the subtree in order.
+            var dst                = subtreeRootIndex;
+            var match              = 1;
+            var modifiedSrcStart   = subtreeRootIndex + 1;
+            var srcToDstIndicesMap = tsa.AllocateAsSpan<int>(oldHierarchyArray.Length - modifiedSrcStart + 1);
+            for (int src = subtreeRootIndex + 1; src < oldHierarchyArray.Length; src++)
+            {
+                var srcData                                = oldHierarchyArray[src];
+                srcToDstIndicesMap[src - modifiedSrcStart] = dst;
+                if (match < extractedSubtree.Length && srcData.entity == extractedSubtree[match].entity)
+                {
+                    match++;
+                    continue;
+                }
+                oldHierarchyArray[dst] = srcData;
+                dst++;
+            }
+            srcToDstIndicesMap[oldHierarchyArray.Length - modifiedSrcStart] = dst;
+
+            // Apply indexing conversions
+            for (int i = subtreeRootIndex; i < dst; i++)
+            {
+                var element = oldHierarchyArray[i];
+                if (element.parentIndex >= modifiedSrcStart)
+                    element.m_parentIndex = srcToDstIndicesMap[element.parentIndex - modifiedSrcStart];
+                element.m_firstChildIndex = srcToDstIndicesMap[element.firstChildIndex - modifiedSrcStart];
+                oldHierarchyArray[i]      = element;
+            }
+            hierarchy.Length = dst;
+
+            tsa.Dispose();
+        }
+
+        public static void RemoveDeadDescendantsFromHierarchy(ref ThreadStackAllocator parentTsa, ref DynamicBuffer<EntityInHierarchy> hierarchy, EntityManager em)
+        {
+            var srcScan   = hierarchy.AsNativeArray().AsSpan();
+            int deadCount = CountAndMarkDeadDescendantsInHierarchy(srcScan, em);
+            if (deadCount == 0)
+                return;
+
+            hierarchy.Length = RemoveMarkedDescendantsInHierarchy(ref parentTsa, srcScan, deadCount);
+        }
+
+        public static void RemoveDeadDescendantsFromHierarchy(ref ThreadStackAllocator parentTsa, ref DynamicBuffer<EntityInHierarchy> hierarchy, EntityStorageInfoLookup esil)
+        {
+            var srcScan   = hierarchy.AsNativeArray().AsSpan();
+            int deadCount = CountAndMarkDeadDescendantsInHierarchy(srcScan, esil);
+            if (deadCount == 0)
+                return;
+
+            hierarchy.Length = RemoveMarkedDescendantsInHierarchy(ref parentTsa, srcScan, deadCount);
+        }
+
+        static int CountAndMarkDeadDescendantsInHierarchy(Span<EntityInHierarchy> hierarchy, EntityManager em)
+        {
+            int deadCount = 0;
+            for (int i = 1; i < hierarchy.Length; i++)
+            {
+                if (!em.IsAlive(hierarchy[i].entity))
+                {
+                    hierarchy[i].m_firstChildIndex = int.MaxValue;
+                    deadCount++;
+                }
+            }
+            return deadCount;
+        }
+
+        static int CountAndMarkDeadDescendantsInHierarchy(Span<EntityInHierarchy> hierarchy, EntityStorageInfoLookup esil)
+        {
+            int deadCount = 0;
+            for (int i = 1; i < hierarchy.Length; i++)
+            {
+                if (!esil.IsAlive(hierarchy[i].entity))
+                {
+                    hierarchy[i].m_firstChildIndex = int.MaxValue;
+                    deadCount++;
+                }
+            }
+            return deadCount;
+        }
+
+        static int RemoveMarkedDescendantsInHierarchy(ref ThreadStackAllocator parentTsa, Span<EntityInHierarchy> hierarchy, int deadCount)
+        {
+            for (int i = 2; i < hierarchy.Length; i++)
+            {
+                ref var element = ref hierarchy[i];
+                while (hierarchy[element.parentIndex].m_firstChildIndex == int.MaxValue)
+                    element.m_parentIndex = hierarchy[element.parentIndex].parentIndex;
+            }
+
+            var tsa        = parentTsa.CreateChildAllocator();
+            var selectFrom = CopyHierarchy(ref tsa, hierarchy);
+            var srcToDst   = tsa.AllocateAsSpan<int>(selectFrom.Length);
+            var dstBuffer  = hierarchy.Slice(0, selectFrom.Length - deadCount);
+
+            dstBuffer[0].m_childCount = 0;
+            srcToDst.Fill(int.MaxValue);
+            srcToDst[0] = 0;
+
+            for (int dst = 1; dst < dstBuffer.Length; dst++)
+            {
+                int bestValue = int.MaxValue;
+                int bestIndex = int.MaxValue;
+                for (int i = 1; i < selectFrom.Length; i++)
+                {
+                    var val = srcToDst[selectFrom[i].parentIndex];
+                    if (val < bestValue)
+                    {
+                        bestValue = val;
+                        bestIndex = i;
+                    }
+                }
+                var     best                  = selectFrom[bestIndex];
+                ref var dstElement            = ref dstBuffer[dst];
+                dstElement.m_descendantEntity = best.m_descendantEntity;
+                dstElement.m_flags            = best.m_flags;
+                dstElement.m_parentIndex      = bestValue;
+                dstElement.m_childCount       = 0;
+                srcToDst[bestIndex]           = dst;
+                dstBuffer[bestValue].m_childCount++;
+            }
+
+            int running = 1 + dstBuffer[0].childCount;
+            for (int i = 1; i < dstBuffer.Length; i++)
+            {
+                dstBuffer[i].m_firstChildIndex  = running;
+                running                        += dstBuffer[i].childCount;
+            }
+            tsa.Dispose();
+            return dstBuffer.Length;
+        }
+        #endregion
+    }
+}
+
