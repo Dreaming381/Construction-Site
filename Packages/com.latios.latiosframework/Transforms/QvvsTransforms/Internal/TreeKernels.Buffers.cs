@@ -4,94 +4,23 @@ using Unity.Collections;
 using Unity.Collections.LowLevel.Unsafe;
 using Unity.Entities;
 using Unity.Mathematics;
-using Unity.Transforms;
 
 namespace Latios.Transforms
 {
-    internal static unsafe class TreeKernels
+    internal static unsafe partial class TreeKernels
     {
-        #region Classification
-        public struct TreeClassification
-        {
-            public enum TreeRole : byte
-            {
-                Solo,
-                Root,
-                InteriorNoChildren,
-                InteriorWithChildren
-            }
-
-            public Entity   root;
-            public int      indexInHierarchy;
-            public TreeRole role;
-            public bool     isRootAlive;
-        }
-
-        public static TreeClassification ClassifyAlive(EntityManager em, Entity entity)
-        {
-            TreeClassification result = default;
-            if (em.HasComponent<RootReference>(entity))
-            {
-                var rootRef             = em.GetComponentData<RootReference>(entity);
-                result.root             = rootRef.rootEntity;
-                result.indexInHierarchy = rootRef.indexInHierarchy;
-                if (em.HasBuffer<EntityInHierarchy>(rootRef.rootEntity))
-                {
-                    var children       = em.GetBuffer<EntityInHierarchy>(rootRef.rootEntity, true)[rootRef.indexInHierarchy].childCount;
-                    result.role        = children != 0 ? TreeClassification.TreeRole.InteriorWithChildren : TreeClassification.TreeRole.InteriorNoChildren;
-                    result.isRootAlive = true;
-                }
-                else
-                {
-                    var children       = em.GetBuffer<EntityInHierarchyCleanup>(rootRef.rootEntity, true)[rootRef.indexInHierarchy].entityInHierarchy.childCount;
-                    result.role        = children != 0 ? TreeClassification.TreeRole.InteriorWithChildren : TreeClassification.TreeRole.InteriorNoChildren;
-                    result.isRootAlive = false;
-                }
-            }
-            else if (em.HasBuffer<EntityInHierarchy>(entity))
-                result.role = TreeClassification.TreeRole.Root;
-            else
-                result.role = TreeClassification.TreeRole.Solo;
-            return result;
-        }
-
-        public static TreeClassification GlassifyAlive(ref ComponentLookup<RootReference>         rootRefLookupRO,
-                                                       ref BufferLookup<EntityInHierarchy>        hierarchyLookupRO,
-                                                       ref BufferLookup<EntityInHierarchyCleanup> cleanupLookupRO,
-                                                       Entity entity)
-        {
-            TreeClassification result = default;
-            if (rootRefLookupRO.TryGetComponent(entity, out var rootRef))
-            {
-                result.root             = rootRef.rootEntity;
-                result.indexInHierarchy = rootRef.indexInHierarchy;
-                if (hierarchyLookupRO.TryGetBuffer(rootRef.rootEntity, out var hierarchy))
-                {
-                    var children       = hierarchy[rootRef.indexInHierarchy].childCount;
-                    result.role        = children != 0 ? TreeClassification.TreeRole.InteriorWithChildren : TreeClassification.TreeRole.InteriorNoChildren;
-                    result.isRootAlive = true;
-                }
-                else
-                {
-                    var children       = cleanupLookupRO[rootRef.rootEntity][rootRef.indexInHierarchy].entityInHierarchy.childCount;
-                    result.role        = children != 0 ? TreeClassification.TreeRole.InteriorWithChildren : TreeClassification.TreeRole.InteriorNoChildren;
-                    result.isRootAlive = false;
-                }
-            }
-            else if (hierarchyLookupRO.HasBuffer(entity))
-                result.role = TreeClassification.TreeRole.Root;
-            else
-                result.role = TreeClassification.TreeRole.Solo;
-            return result;
-        }
-        #endregion
-
         #region Hierarchy Buffer Ops
         public static Span<EntityInHierarchy> CopyHierarchy(ref ThreadStackAllocator tsa, in ReadOnlySpan<EntityInHierarchy> hierarchy)
         {
             var span = tsa.AllocateAsSpan<EntityInHierarchy>(hierarchy.Length);
             hierarchy.CopyTo(span);
             return span;
+        }
+
+        public static void CopyHierarchyToCleanup(in DynamicBuffer<EntityInHierarchy> hierarchy, ref DynamicBuffer<EntityInHierarchyCleanup> cleanup)
+        {
+            cleanup.Clear();
+            cleanup.CopyFrom(hierarchy.Reinterpret<EntityInHierarchyCleanup>());
         }
 
         public static Span<Entity> CopyHierarchyEntities(ref ThreadStackAllocator tsa, in ReadOnlySpan<EntityInHierarchy> hierarchy)
@@ -159,6 +88,31 @@ namespace Latios.Transforms
                 child.m_firstChildIndex = previous.firstChildIndex + previous.childCount;
             }
             return result;
+        }
+
+        public static Span<Entity> GetAncestryEntitiesExcludingRoot(ref ThreadStackAllocator tsa, in ReadOnlySpan<EntityInHierarchy> hierarchy, int childIndex)
+        {
+            int count = 0;
+            for (int i = hierarchy[childIndex].parentIndex; i > 0; i = hierarchy[i].parentIndex)
+                count++;
+            var result = tsa.AllocateAsSpan<Entity>(count);
+            count      = 0;
+            for (int i = hierarchy[childIndex].parentIndex; i > 0; i = hierarchy[i].parentIndex)
+            {
+                result[count] = hierarchy[i].entity;
+                count++;
+            }
+            return result;
+        }
+
+        public static int FindEntityAfterCleaning(in ReadOnlySpan<EntityInHierarchy> hierarchy, Entity entity, int oldIndex)
+        {
+            if (oldIndex < hierarchy.Length && hierarchy[oldIndex].entity == entity)
+                return oldIndex;
+            for (int i = 1; i <= hierarchy.Length; i++)
+                if (hierarchy[i].entity == entity)
+                    return i;
+            return -1;
         }
 
         public static void BuildOriginalParentChildHierarchy(ref DynamicBuffer<EntityInHierarchy> hierarchy, Entity parent, Entity child, InheritanceFlags flags)
@@ -450,7 +404,9 @@ namespace Latios.Transforms
             if (deadCount == 0)
                 return;
 
-            hierarchy.Length = RemoveMarkedDescendantsInHierarchy(ref parentTsa, srcScan, deadCount);
+            hierarchy.Length = RemoveMarkedDescendantsInHierarchy(ref parentTsa,
+                                                                  srcScan,
+                                                                  deadCount);
         }
 
         static int CountAndMarkDeadDescendantsInHierarchy(Span<EntityInHierarchy> hierarchy, EntityManager em)
@@ -539,6 +495,136 @@ namespace Latios.Transforms
         }
         #endregion
 
+        #region LinkedEntityGroup
+        public static Span<Entity> GetHierarchyEntitiesInLeg(ref ThreadStackAllocator tsa,
+                                                             ReadOnlySpan<EntityInHierarchy> hierarchy,
+                                                             ReadOnlySpan<Entity>            oldLeg,
+                                                             out bool matchedAll)
+        {
+            var required     = math.min(hierarchy.Length, oldLeg.Length);
+            var resultBuffer = tsa.AllocateAsSpan<Entity>(required);
+            int resultCount  = 0;
+            matchedAll       = true;
+            foreach (var h in hierarchy)
+            {
+                var  e       = h.entity;
+                bool matched = false;
+                for (int i = 0; i < oldLeg.Length; i++)
+                {
+                    if (oldLeg[i] == e)
+                    {
+                        resultBuffer[resultCount] = e;
+                        resultCount++;
+                        matched = true;
+                        break;
+                    }
+                }
+                matchedAll |= matched;
+            }
+            return resultBuffer.Slice(0, resultCount);
+        }
+
+        public static void AddEntityToLeg(ref DynamicBuffer<LinkedEntityGroup> leg, Entity entity)
+        {
+            leg.Add(new LinkedEntityGroup { Value = entity });
+        }
+
+        public static void AddEntitiesToLeg(ref DynamicBuffer<LinkedEntityGroup> leg, ReadOnlySpan<Entity> entities)
+        {
+            var buffer = leg.Reinterpret<Entity>();
+            buffer.EnsureCapacity(buffer.Length + entities.Length);
+            foreach (var e in entities)
+                buffer.Add(e);
+        }
+
+        public static void RemoveEntityFromLeg(ref DynamicBuffer<LinkedEntityGroup> leg, Entity entity, out bool matched)
+        {
+            var index = leg.Reinterpret<Entity>().AsNativeArray().IndexOf(entity);
+            if (index >= 0)
+            {
+                if (index > 0)
+                    leg.RemoveAtSwapBack(index);
+                matched = true;
+            }
+            else
+                matched = false;
+        }
+
+        public static void RemoveEntityFromAllAncestorLegs(ReadOnlySpan<EntityInHierarchy> hierarchy, int indexToRemove, EntityManager em)
+        {
+        }
+
+        public static void RemoveHierarchyEntitiesFromLeg(ref DynamicBuffer<LinkedEntityGroup> leg, ReadOnlySpan<EntityInHierarchy> hierarchy)
+        {
+            foreach (var h in hierarchy)
+                RemoveEntityFromLeg(ref leg, h.entity, out _);
+        }
+
+        public static Span<Entity> GetAndRemoveHierarchyEntitiesFromLeg(ref ThreadStackAllocator tsa,
+                                                                        ref DynamicBuffer<LinkedEntityGroup> leg,
+                                                                        ReadOnlySpan<EntityInHierarchy>      hierarchy,
+                                                                        out bool matchedAll)
+        {
+            var required     = math.min(hierarchy.Length, leg.Length);
+            var resultBuffer = tsa.AllocateAsSpan<Entity>(required);
+            int resultCount  = 0;
+            matchedAll       = true;
+            foreach (var h in hierarchy)
+            {
+                RemoveEntityFromLeg(ref leg, h.entity, out var matched);
+                matchedAll &= matched;
+                if (matched)
+                {
+                    resultBuffer[resultCount] = h.entity;
+                    resultCount++;
+                }
+            }
+            return resultBuffer.Slice(0, resultCount);
+        }
+
+        public static void RemoveMarkedDescendantsFromLeg(ref DynamicBuffer<LinkedEntityGroup> legBuffer, ReadOnlySpan<EntityInHierarchy> hierarchy)
+        {
+            var leg = legBuffer.Reinterpret<Entity>();
+            for (int i = 1; i < hierarchy.Length; i++)
+            {
+                if (hierarchy[i].m_firstChildIndex != int.MaxValue)
+                    continue;
+
+                var index = leg.AsNativeArray().IndexOf(hierarchy[i].entity);
+                if (index >= 0)
+                    leg.RemoveAtSwapBack(index);
+            }
+        }
+        #endregion
+
+        #region Hierarchy and LEG
+        public static void RemoveDeadDescendantsFromHierarchyAndLeg(ref ThreadStackAllocator parentTsa, ref DynamicBuffer<EntityInHierarchy> hierarchy,
+                                                                    ref DynamicBuffer<LinkedEntityGroup> leg, EntityManager em)
+        {
+            var srcScan   = hierarchy.AsNativeArray().AsSpan();
+            int deadCount = CountAndMarkDeadDescendantsInHierarchy(srcScan, em);
+            if (deadCount == 0)
+                return;
+
+            RemoveMarkedDescendantsFromLeg(ref leg, srcScan);
+            hierarchy.Length = RemoveMarkedDescendantsInHierarchy(ref parentTsa,
+                                                                  srcScan,
+                                                                  deadCount);
+        }
+
+        public static void RemoveDeadDescendantsFromHierarchyAndLeg(ref ThreadStackAllocator parentTsa, ref DynamicBuffer<EntityInHierarchy> hierarchy,
+                                                                    ref DynamicBuffer<LinkedEntityGroup> leg, EntityStorageInfoLookup esil)
+        {
+            var srcScan   = hierarchy.AsNativeArray().AsSpan();
+            int deadCount = CountAndMarkDeadDescendantsInHierarchy(srcScan, esil);
+            if (deadCount == 0)
+                return;
+
+            RemoveMarkedDescendantsFromLeg(ref leg, srcScan);
+            hierarchy.Length = RemoveMarkedDescendantsInHierarchy(ref parentTsa, srcScan, deadCount);
+        }
+        #endregion
+
         #region Root Reference
         public static void UpdateRootReferencesFromDiff(ReadOnlySpan<EntityInHierarchy> hierarchy, ReadOnlySpan<Entity> oldEntities, EntityManager em)
         {
@@ -559,113 +645,6 @@ namespace Latios.Transforms
             {
                 if (i >= oldEntities.Length || hierarchy[i].entity != oldEntities[i])
                     rootReferenceLookupRW[hierarchy[i].entity] = new RootReference { m_rootEntity = root, m_indexInHierarchy = i };
-            }
-        }
-        #endregion
-
-        #region LinkedEntityGroup
-        public static void AddEntityToLeg(ref DynamicBuffer<LinkedEntityGroup> leg, Entity entity)
-        {
-            leg.Add(new LinkedEntityGroup { Value = entity });
-        }
-
-        public static void AddHierarchyEntitiesPresentInOldLegToNewLeg(ref DynamicBuffer<LinkedEntityGroup> newLeg,
-                                                                       ReadOnlySpan<EntityInHierarchy>      hierarchy,
-                                                                       ReadOnlySpan<Entity>                 oldLeg,
-                                                                       out bool matchedAll)
-        {
-            matchedAll = true;
-            foreach (var h in hierarchy)
-            {
-                var  e       = h.entity;
-                bool matched = false;
-                for (int i = 0; i < oldLeg.Length; i++)
-                {
-                    if (oldLeg[i] == e)
-                    {
-                        newLeg.Add(e);
-                        matched = true;
-                        break;
-                    }
-                }
-                matchedAll |= matched;
-            }
-        }
-
-        public static void RemoveEntityFromLeg(ref DynamicBuffer<LinkedEntityGroup> leg, Entity entity, out bool matched)
-        {
-            var index = leg.Reinterpret<Entity>().AsNativeArray().IndexOf(entity);
-            if (index >= 0)
-            {
-                leg.RemoveAtSwapBack(index);
-                matched = true;
-            }
-            else
-                matched = false;
-        }
-
-        public static void RemoveEntityFromAllAncestorLegs(ReadOnlySpan<EntityInHierarchy> hierarchy, int indexToRemove, EntityManager em)
-        {
-            var entity = hierarchy[indexToRemove].entity;
-            for (int i = hierarchy[indexToRemove].parentIndex; i >= 0; i = hierarchy[i].parentIndex)
-            {
-                var e = hierarchy[i].entity;
-                if (em.HasBuffer<LinkedEntityGroup>(e))
-                {
-                    var leg = em.GetBuffer<LinkedEntityGroup>(e);
-                    RemoveEntityFromLeg(ref leg, entity, out _);
-                }
-            }
-        }
-
-        public static void RemoveEntityFromAllAncestorLegs(ReadOnlySpan<EntityInHierarchy>     hierarchy,
-                                                           int indexToRemove,
-                                                           ref BufferLookup<LinkedEntityGroup> linkedEntityGroupLookupRW)
-        {
-            var entity = hierarchy[indexToRemove].entity;
-            for (int i = hierarchy[indexToRemove].parentIndex; i >= 0; i = hierarchy[i].parentIndex)
-            {
-                var e = hierarchy[i].entity;
-                if (linkedEntityGroupLookupRW.TryGetBuffer(e, out var leg))
-                {
-                    RemoveEntityFromLeg(ref leg, entity, out _);
-                }
-            }
-        }
-
-        public static void RemoveHierarchyEntitiesFromLeg(ref DynamicBuffer<LinkedEntityGroup> leg, ReadOnlySpan<EntityInHierarchy> hierarchy)
-        {
-            foreach (var h in hierarchy)
-                RemoveEntityFromLeg(ref leg, h.entity, out _);
-        }
-
-        public static void RemoveSubtreeEntitiesFromAllAncestorLegs(ReadOnlySpan<EntityInHierarchy> fullHierarchy,
-                                                                    int subtreeRootIndex,
-                                                                    ReadOnlySpan<EntityInHierarchy> subtree,
-                                                                    EntityManager em)
-        {
-            for (int i = fullHierarchy[subtreeRootIndex].parentIndex; i >= 0; i = fullHierarchy[i].parentIndex)
-            {
-                var e = fullHierarchy[i].entity;
-                if (em.HasBuffer<LinkedEntityGroup>(e))
-                {
-                    var leg = em.GetBuffer<LinkedEntityGroup>(e);
-                    RemoveHierarchyEntitiesFromLeg(ref leg, subtree);
-                }
-            }
-        }
-
-        public static void RemoveMarkedDescendantsFromLeg(ref DynamicBuffer<LinkedEntityGroup> legBuffer, ReadOnlySpan<EntityInHierarchy> hierarchy)
-        {
-            var leg = legBuffer.Reinterpret<Entity>();
-            for (int i = 1; i < hierarchy.Length; i++)
-            {
-                if (hierarchy[i].m_firstChildIndex != int.MaxValue)
-                    continue;
-
-                var index = leg.AsNativeArray().IndexOf(hierarchy[i].entity);
-                if (index >= 0)
-                    leg.RemoveAtSwapBack(index);
             }
         }
         #endregion

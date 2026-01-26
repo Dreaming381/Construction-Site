@@ -11,6 +11,27 @@ using Unity.Mathematics;
 
 namespace Latios.Transforms
 {
+    public enum AddChildOptions : byte
+    {
+        /// <summary>
+        /// If the child is already a child of a previous hierarchy, then it and its descendants are removed from all
+        /// old ancestor LinkedEntityGroups. Every entity that was removed from the old root is added to the new root's
+        /// LinkedEntityGroup. The child retains its own LinkedEntityGroup.
+        /// </summary>
+        AttachLinkedEntityGroup,
+        /// <summary>
+        /// If the child is already a child of a previous hierarchy, then it and its descendants are removed from all
+        /// old ancestor LinkedEntityGroups as well as the child's. Every entity that was removed from the old root or
+        /// the child's is added to the new root's LinkedEntityGroup.
+        /// </summary>
+        TransferLinkedEntityGroup,
+        /// <summary>
+        /// LinkedEntityGroup is left untouched. EntityInHierarchyCleanup is added to the root to ensure no dangling
+        /// RootReferences are left behind. This has a cost associated with it.
+        /// </summary>
+        IgnoreLinkedEntityGroup
+    }
+
     public static partial class TransformTools
     {
         #region API
@@ -35,6 +56,8 @@ namespace Latios.Transforms
                                            bool transferLinkedEntityGroup = true)
         {
             CheckChangeParent(em, parent, child, inheritanceFlags, transferLinkedEntityGroup);
+            TreeChangeMainThread.AddChild(em, parent, child, inheritanceFlags, AddChildOptions.AttachLinkedEntityGroup);
+            return;
 
             bool parentHasRootRef   = em.HasComponent<RootReference>(parent);
             bool childHasRootRef    = em.HasComponent<RootReference>(child);

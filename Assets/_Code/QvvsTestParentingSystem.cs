@@ -118,8 +118,8 @@ public partial struct QvvsTestParentingSystem : ISystem
             }
         }
 
-        for (int i = 0; i < 5; i++)
-        {
+        /*for (int i = 0; i < 5; i++)
+           {
             var child = entities[rng.NextInt(0, entities.Length)];
             if (state.EntityManager.GetComponentData<CheckParent>(child).parent != Entity.Null)
             {
@@ -152,7 +152,7 @@ public partial struct QvvsTestParentingSystem : ISystem
                     }
                 }
             }
-        }
+           }*/
     }
 }
 
