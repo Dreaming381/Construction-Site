@@ -238,7 +238,7 @@ namespace Latios.Transforms
             CleanHierarchy(ref tsa, em, parentClassification.root, ref hierarchy, !rootAddSet.linkedEntityGroup, out var removeRootLeg);
             if (rootAddSet.entityInHierarchyCleanup || (parentClassification.isRootAlive && em.HasBuffer<EntityInHierarchyCleanup>(root)))
             {
-                var cleanup = em.GetBuffer<EntityInHierarchyCleanup>(parent, false);
+                var cleanup = em.GetBuffer<EntityInHierarchyCleanup>(root, false);
                 TreeKernels.CopyHierarchyToCleanup(in hierarchy, ref cleanup);
             }
             TreeKernels.UpdateRootReferencesFromDiff(hierarchy.AsNativeArray(), old, em);
@@ -406,7 +406,7 @@ namespace Latios.Transforms
             if (rootAddSet.entityInHierarchyCleanup || (parentClassification.isRootAlive && em.HasBuffer<EntityInHierarchyCleanup>(parent)))
             {
                 hierarchy   = em.GetBuffer<EntityInHierarchy>(root, true);
-                var cleanup = em.GetBuffer<EntityInHierarchyCleanup>(parent, false);
+                var cleanup = em.GetBuffer<EntityInHierarchyCleanup>(root, false);
                 TreeKernels.CopyHierarchyToCleanup(in hierarchy, ref cleanup);
             }
 
@@ -612,7 +612,7 @@ namespace Latios.Transforms
             CleanHierarchy(ref tsa, em, parentClassification.root, ref hierarchy, parentClassification.isRootAlive, out var removeLeg);
             if (parentClassification.isRootAlive && em.HasBuffer<EntityInHierarchyCleanup>(parentClassification.root))
             {
-                var cleanup = em.GetBuffer<EntityInHierarchyCleanup>(parent, false);
+                var cleanup = em.GetBuffer<EntityInHierarchyCleanup>(parentClassification.root, false);
                 TreeKernels.CopyHierarchyToCleanup(in hierarchy, ref cleanup);
             }
             TreeKernels.UpdateRootReferencesFromDiff(hierarchy.AsNativeArray(), old, em);
@@ -663,7 +663,7 @@ namespace Latios.Transforms
             CleanHierarchy(ref tsa, em, root, ref hierarchy, !rootAddSet.linkedEntityGroup, out var removeRootLeg);
             if (rootAddSet.entityInHierarchyCleanup || em.HasBuffer<EntityInHierarchyCleanup>(parent))
             {
-                var cleanup = em.GetBuffer<EntityInHierarchyCleanup>(parent, false);
+                var cleanup = em.GetBuffer<EntityInHierarchyCleanup>(root, false);
                 TreeKernels.CopyHierarchyToCleanup(in hierarchy, ref cleanup);
             }
             TreeKernels.UpdateRootReferencesFromDiff(hierarchy.AsNativeArray(), old, em);
@@ -918,7 +918,7 @@ namespace Latios.Transforms
             CleanHierarchy(ref tsa, em, parentClassification.root, ref hierarchy, parentClassification.isRootAlive, out var removeLeg);
             if (parentClassification.isRootAlive && em.HasBuffer<EntityInHierarchyCleanup>(parentClassification.root))
             {
-                var cleanup = em.GetBuffer<EntityInHierarchyCleanup>(parent, false);
+                var cleanup = em.GetBuffer<EntityInHierarchyCleanup>(parentClassification.root, false);
                 TreeKernels.CopyHierarchyToCleanup(in hierarchy, ref cleanup);
             }
             TreeKernels.UpdateRootReferencesFromDiff(hierarchy.AsNativeArray(), old, em);
@@ -1014,7 +1014,7 @@ namespace Latios.Transforms
             if (removeOldRootLeg)
                 em.RemoveComponent<LinkedEntityGroup>(oldRoot);
             if (removeRootLeg)
-                em.RemoveComponent<LinkedEntityGroup>(parent);
+                em.RemoveComponent<LinkedEntityGroup>(root);
 
             Validate(em, parent, child);
 
@@ -1189,14 +1189,14 @@ namespace Latios.Transforms
             var last = handle.GetFromIndexInHierarchy(handle.totalInHierarchy - 1);
             if (last.m_hierarchy[last.indexInHierarchy].firstChildIndex != last.totalInHierarchy)
             {
-                throw new System.InvalidOperationException("Bad things happened during validation.");
+                throw new System.InvalidOperationException($"Bad things happened during validation. Last did not match hierarchy length. root: {handle.root.entity}");
             }
             for (int i = 1; i < last.m_hierarchy.Length; i++)
             {
                 var b = last.m_hierarchy[i];
                 var a = last.m_hierarchy[i - 1];
                 if (b.firstChildIndex != a.firstChildIndex + a.childCount)
-                    throw new System.InvalidOperationException("Bad things happened during validation.");
+                    throw new System.InvalidOperationException($"Bad things happened during validation. Index {i} has bad indexing. root: {handle.root.entity}");
             }
             if (handle.entity != child || parentHandle.entity != parent)
             {

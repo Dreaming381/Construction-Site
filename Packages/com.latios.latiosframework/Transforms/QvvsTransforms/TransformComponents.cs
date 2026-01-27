@@ -151,7 +151,7 @@ namespace Latios.Transforms
     /// A copy of EntityInHierarchy, in case the root is destroyed.
     /// </summary>
     [InternalBufferCapacity(0)]
-    public struct EntityInHierarchyCleanup : IBufferElementData
+    public struct EntityInHierarchyCleanup : ICleanupBufferElementData
     {
         public EntityInHierarchy entityInHierarchy;
     }

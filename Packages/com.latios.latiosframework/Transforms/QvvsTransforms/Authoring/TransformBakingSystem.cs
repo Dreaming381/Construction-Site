@@ -622,7 +622,7 @@ namespace Latios.Transforms.Authoring.Systems
                     EnqueueChildren(current.children, thisIndex);
                 }
 
-                int previousOffset = childrenOfRoot.Length;
+                int previousOffset = childrenOfRoot.Length + 1;
                 for (int i = 1; i < computedTransforms.Length; i++)
                 {
                     ref var element = ref buffer.ElementAt(i);

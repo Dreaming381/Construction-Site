@@ -467,14 +467,15 @@ namespace Latios.Transforms
                 int bestIndex = int.MaxValue;
                 for (int i = 1; i < selectFrom.Length; i++)
                 {
-                    var val = srcToDst[selectFrom[i].parentIndex];
+                    var parentIndex = selectFrom[i].parentIndex;
+                    var val         = parentIndex != int.MaxValue ? srcToDst[selectFrom[i].parentIndex] : int.MaxValue;
                     if (val < bestValue)
                     {
                         bestValue = val;
                         bestIndex = i;
                     }
                 }
-                var     best                  = selectFrom[bestIndex];
+                ref var best                  = ref selectFrom[bestIndex];
                 ref var dstElement            = ref dstBuffer[dst];
                 dstElement.m_descendantEntity = best.m_descendantEntity;
                 dstElement.m_flags            = best.m_flags;
@@ -482,6 +483,7 @@ namespace Latios.Transforms
                 dstElement.m_childCount       = 0;
                 srcToDst[bestIndex]           = dst;
                 dstBuffer[bestValue].m_childCount++;
+                best.m_parentIndex = int.MaxValue;
             }
 
             int running = 1 + dstBuffer[0].childCount;
@@ -607,9 +609,7 @@ namespace Latios.Transforms
                 return;
 
             RemoveMarkedDescendantsFromLeg(ref leg, srcScan);
-            hierarchy.Length = RemoveMarkedDescendantsInHierarchy(ref parentTsa,
-                                                                  srcScan,
-                                                                  deadCount);
+            hierarchy.Length = RemoveMarkedDescendantsInHierarchy(ref parentTsa, srcScan, deadCount);
         }
 
         public static void RemoveDeadDescendantsFromHierarchyAndLeg(ref ThreadStackAllocator parentTsa, ref DynamicBuffer<EntityInHierarchy> hierarchy,
