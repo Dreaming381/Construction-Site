@@ -13,12 +13,14 @@ namespace Latios.Transforms
 {
     internal static unsafe class TreeChangeMainThread
     {
-        public static void AddChild(this EntityManager em,
+        public static void AddChild(EntityManager em,
                                     Entity parent,
                                     Entity child,
                                     InheritanceFlags flags,
                                     AddChildOptions options)
         {
+            TreeChangeSafetyChecks.CheckChangeParent(em, parent, child, flags, options);
+
             var parentClassification = TreeKernels.ClassifyAlive(em, parent);
             var childClassification  = TreeKernels.ClassifyAlive(em, child);
 
@@ -42,18 +44,25 @@ namespace Latios.Transforms
                     break;
                 case (TreeKernels.TreeClassification.TreeRole.Root, TreeKernels.TreeClassification.TreeRole.InternalNoChildren):
                 case (TreeKernels.TreeClassification.TreeRole.Root, TreeKernels.TreeClassification.TreeRole.InternalWithChildren):
+                    TreeChangeSafetyChecks.CheckNotAssigningRootChildToDescendant(parent, child, parentClassification);
                     AddRootChildToInternalParent(em, parent, parentClassification, child, flags, options);
                     break;
                 case (TreeKernels.TreeClassification.TreeRole.InternalNoChildren, TreeKernels.TreeClassification.TreeRole.Solo):
                     AddInternalChildWithoutSubtreeToSoloParent(em, parent, child, childClassification, flags, options);
                     break;
                 case (TreeKernels.TreeClassification.TreeRole.InternalNoChildren, TreeKernels.TreeClassification.TreeRole.Root):
-                    AddInternalChildWithoutSubtreeToRootParent(em, parent, child, childClassification, flags, options);
+                    if (parent == childClassification.root)
+                        AddInternalChildWithoutSubtreeToRootParentSameRoot(em, parent, child, childClassification, flags);
+                    else
+                        AddInternalChildWithoutSubtreeToRootParentDifferentRoot(em, parent, child, childClassification, flags, options);
                     break;
                 case (TreeKernels.TreeClassification.TreeRole.InternalNoChildren, TreeKernels.TreeClassification.TreeRole.InternalNoChildren):
                 case (TreeKernels.TreeClassification.TreeRole.InternalNoChildren, TreeKernels.TreeClassification.TreeRole.InternalWithChildren):
                     if (parentClassification.root == childClassification.root)
+                    {
+                        TreeChangeSafetyChecks.CheckNotAssigningChildToDescendant(em, parent, child, parentClassification, childClassification);
                         AddInternalChildWithoutSubtreeToInternalParentSameRoot(em, parent, parentClassification, child, childClassification, flags);
+                    }
                     else
                         AddInternalChildWithoutSubtreeToInternalParentDifferentRoots(em, parent, parentClassification, child, childClassification, flags, options);
                     break;
@@ -61,12 +70,18 @@ namespace Latios.Transforms
                     AddInternalChildWithSubtreeToSoloParent(em, parent, child, childClassification, flags, options);
                     break;
                 case (TreeKernels.TreeClassification.TreeRole.InternalWithChildren, TreeKernels.TreeClassification.TreeRole.Root):
-                    AddInternalChildWithSubtreeToRootParent(em, parent, child, childClassification, flags, options);
+                    if (parent == childClassification.root)
+                        AddInternalChildWithSubtreeToRootParentSameRoot(em, parent, child, childClassification, flags);
+                    else
+                        AddInternalChildWithSubtreeToRootParentDifferentRoot(em, parent, child, childClassification, flags, options);
                     break;
                 case (TreeKernels.TreeClassification.TreeRole.InternalWithChildren, TreeKernels.TreeClassification.TreeRole.InternalNoChildren):
                 case (TreeKernels.TreeClassification.TreeRole.InternalWithChildren, TreeKernels.TreeClassification.TreeRole.InternalWithChildren):
                     if (parentClassification.root == childClassification.root)
+                    {
+                        TreeChangeSafetyChecks.CheckNotAssigningChildToDescendant(em, parent, child, parentClassification, childClassification);
                         AddInternalChildWithSubtreeToInternalParentSameRoot(em, parent, parentClassification, child, childClassification, flags);
+                    }
                     else
                         AddInternalChildWithSubtreeToInternalParentDifferentRoots(em, parent, parentClassification, child, childClassification, flags, options);
                     break;
@@ -97,6 +112,28 @@ namespace Latios.Transforms
                     Propagate.WriteAndPropagate(handle.m_hierarchy, dummy, command, ref ema, ref ema);
                 }
             }
+        }
+
+        public static void CleanHierarchy(this EntityManager em, Entity entityBelongingToHierarchy)
+        {
+            var foundRoot = TreeKernels.FindRoot(em, entityBelongingToHierarchy);
+            if (!foundRoot.found)
+                return;
+
+            var tsa = ThreadStackAllocator.GetAllocator();
+
+            var root      = foundRoot.root;
+            var isAlive   = foundRoot.isRootAlive;
+            var hierarchy = isAlive ? em.GetBuffer<EntityInHierarchy>(root, false) : em.GetBuffer<EntityInHierarchyCleanup>(root, false).Reinterpret<EntityInHierarchy>();
+            var old       = TreeKernels.CopyHierarchyEntities(ref tsa, hierarchy.AsNativeArray());
+            CleanHierarchy(ref tsa, em, root, ref hierarchy, isAlive, out bool removeLeg);
+            TreeKernels.UpdateRootReferencesFromDiff(hierarchy.AsNativeArray(), old, em);
+            if (hierarchy.Length < 2)
+                TreeKernels.RemoveRootComponents(em, root, removeLeg);
+            else if (removeLeg)
+                em.RemoveComponent<LinkedEntityGroup>(root);
+
+            tsa.Dispose();
         }
 
         #region Solo Children
@@ -456,12 +493,42 @@ namespace Latios.Transforms
             tsa.Dispose();
         }
 
-        static void AddInternalChildWithoutSubtreeToRootParent(EntityManager em,
-                                                               Entity parent,
-                                                               Entity child,
-                                                               TreeKernels.TreeClassification childClassification,
-                                                               InheritanceFlags flags,
-                                                               AddChildOptions options)
+        static void AddInternalChildWithoutSubtreeToRootParentSameRoot(EntityManager em,
+                                                                       Entity parent,
+                                                                       Entity child,
+                                                                       TreeKernels.TreeClassification childClassification,
+                                                                       InheritanceFlags flags)
+        {
+            var tsa = ThreadStackAllocator.GetAllocator();
+
+            // We do not need to account for ticked vs unticked in the ancestry, because the root should already have everything
+            var hierarchy = em.GetBuffer<EntityInHierarchy>(parent, false);
+            var old       = TreeKernels.CopyHierarchyEntities(ref tsa, hierarchy.AsNativeArray());
+            TreeKernels.RemoveSoloFromHierarchy(ref hierarchy, childClassification.indexInHierarchy);
+            TreeKernels.InsertSoloEntityIntoHierarchy(ref hierarchy, 0, child, flags);
+            CleanHierarchy(ref tsa, em, parent, ref hierarchy, true, out var removeLeg);
+            if (em.HasBuffer<EntityInHierarchyCleanup>(parent))
+            {
+                var cleanup = em.GetBuffer<EntityInHierarchyCleanup>(parent, false);
+                TreeKernels.CopyHierarchyToCleanup(in hierarchy, ref cleanup);
+            }
+            TreeKernels.UpdateRootReferencesFromDiff(hierarchy.AsNativeArray(), old, em);
+
+            // Cleaning can still result in LEG being removed.
+            if (removeLeg)
+                em.RemoveComponent<LinkedEntityGroup>(parent);
+
+            Validate(em, parent, child);
+
+            tsa.Dispose();
+        }
+
+        static void AddInternalChildWithoutSubtreeToRootParentDifferentRoot(EntityManager em,
+                                                                            Entity parent,
+                                                                            Entity child,
+                                                                            TreeKernels.TreeClassification childClassification,
+                                                                            InheritanceFlags flags,
+                                                                            AddChildOptions options)
         {
             var tsa = ThreadStackAllocator.GetAllocator();
 
@@ -710,12 +777,43 @@ namespace Latios.Transforms
             tsa.Dispose();
         }
 
-        static void AddInternalChildWithSubtreeToRootParent(EntityManager em,
-                                                            Entity parent,
-                                                            Entity child,
-                                                            TreeKernels.TreeClassification childClassification,
-                                                            InheritanceFlags flags,
-                                                            AddChildOptions options)
+        static void AddInternalChildWithSubtreeToRootParentSameRoot(EntityManager em,
+                                                                    Entity parent,
+                                                                    Entity child,
+                                                                    TreeKernels.TreeClassification childClassification,
+                                                                    InheritanceFlags flags)
+        {
+            var tsa = ThreadStackAllocator.GetAllocator();
+
+            // We do not need to account for ticked vs unticked in the ancestry, because the root should already have everything
+            var hierarchy = em.GetBuffer<EntityInHierarchy>(parent, false);
+            var old       = TreeKernels.CopyHierarchyEntities(ref tsa, hierarchy.AsNativeArray());
+            var subtree   = TreeKernels.ExtractSubtree(ref tsa, hierarchy.AsNativeArray(), childClassification.indexInHierarchy);
+            TreeKernels.RemoveSubtreeFromHierarchy(ref tsa, ref hierarchy, childClassification.indexInHierarchy, subtree);
+            TreeKernels.InsertSubtreeIntoHierarchy(ref hierarchy, 0, subtree, flags);
+            CleanHierarchy(ref tsa, em, parent, ref hierarchy, true, out var removeLeg);
+            if (em.HasBuffer<EntityInHierarchyCleanup>(parent))
+            {
+                var cleanup = em.GetBuffer<EntityInHierarchyCleanup>(parent, false);
+                TreeKernels.CopyHierarchyToCleanup(in hierarchy, ref cleanup);
+            }
+            TreeKernels.UpdateRootReferencesFromDiff(hierarchy.AsNativeArray(), old, em);
+
+            // Cleaning can still result in LEG being removed.
+            if (removeLeg)
+                em.RemoveComponent<LinkedEntityGroup>(parent);
+
+            Validate(em, parent, child);
+
+            tsa.Dispose();
+        }
+
+        static void AddInternalChildWithSubtreeToRootParentDifferentRoot(EntityManager em,
+                                                                         Entity parent,
+                                                                         Entity child,
+                                                                         TreeKernels.TreeClassification childClassification,
+                                                                         InheritanceFlags flags,
+                                                                         AddChildOptions options)
         {
             var tsa = ThreadStackAllocator.GetAllocator();
 

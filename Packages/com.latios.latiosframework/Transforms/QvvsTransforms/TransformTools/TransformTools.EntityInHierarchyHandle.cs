@@ -84,7 +84,7 @@ namespace Latios.Transforms
         #endregion
 
         #region Internal
-        internal static EntityInHierarchyHandle GetHierarchyHandle(Entity entity, EntityManager entityManager)
+        internal static EntityInHierarchyHandle GetHierarchyHandle(Entity entity, EntityManager entityManager, bool readOnly = true)
         {
             if (entityManager.HasComponent<RootReference>(entity))
             {
@@ -92,9 +92,9 @@ namespace Latios.Transforms
                 return rootRef.ToHandle(entityManager);
             }
             if (entityManager.HasBuffer<EntityInHierarchy>(entity))
-                return entityManager.GetBuffer<EntityInHierarchy>(entity).GetRootHandle();
+                return entityManager.GetBuffer<EntityInHierarchy>(entity, readOnly).GetRootHandle();
             if (entityManager.HasBuffer<EntityInHierarchyCleanup>(entity))
-                return entityManager.GetBuffer<EntityInHierarchyCleanup>(entity).GetRootHandle();
+                return entityManager.GetBuffer<EntityInHierarchyCleanup>(entity, readOnly).GetRootHandle();
             return default;
         }
 

@@ -1,5 +1,6 @@
 using Unity.Collections;
 using Unity.Entities;
+using Unity.Entities.UniversalDelegates;
 using Unity.Mathematics;
 
 namespace Latios.Transforms
@@ -78,6 +79,49 @@ namespace Latios.Transforms
             else
                 result.role = TreeClassification.TreeRole.Solo;
             return result;
+        }
+
+        public struct FoundRoot
+        {
+            public Entity root;
+            public int    indexInHierarchy;
+            public bool   isRootAlive;
+            public bool   found;
+        }
+
+        public static FoundRoot FindRoot(EntityManager em, Entity entity)
+        {
+            if (em.HasComponent<RootReference>(entity))
+            {
+                var rr = em.GetComponentData<RootReference>(entity);
+                return new FoundRoot
+                {
+                    root             = rr.rootEntity,
+                    indexInHierarchy = rr.indexInHierarchy,
+                    isRootAlive      = em.IsAlive(rr.rootEntity),
+                    found            = true
+                };
+            }
+            else if (em.HasBuffer<EntityInHierarchy>(entity))
+            {
+                return new FoundRoot
+                {
+                    root        = entity,
+                    isRootAlive = em.IsAlive(entity),
+                    found       = true
+                };
+            }
+            else if (em.HasBuffer<EntityInHierarchyCleanup>(entity))
+            {
+                return new FoundRoot
+                {
+                    root        = entity,
+                    isRootAlive = em.IsAlive(entity),
+                    found       = false
+                };
+            }
+            else
+                return default;
         }
     }
 }

@@ -53,16 +53,16 @@ namespace Latios.Transforms
     [BurstCompile]
     public struct ParentCommand : IInstantiateCommand
     {
-        public ParentCommand(Entity parent, InheritanceFlags inheritanceFlags = InheritanceFlags.Normal, bool transferLinkedEntityGroup = true)
+        public ParentCommand(Entity parent, InheritanceFlags inheritanceFlags = InheritanceFlags.Normal, AddChildOptions addChildOptions = AddChildOptions.AttachLinkedEntityGroup)
         {
-            this.parent                    = parent;
-            this.inheritanceFlags          = inheritanceFlags;
-            this.transferLinkedEntityGroup = transferLinkedEntityGroup;
+            this.parent           = parent;
+            this.inheritanceFlags = inheritanceFlags;
+            this.options          = addChildOptions;
         }
 
         public Entity           parent;
         public InheritanceFlags inheritanceFlags;
-        public bool             transferLinkedEntityGroup;
+        public AddChildOptions  options;
 
         public FunctionPointer<IInstantiateCommand.OnPlayback> GetFunctionPointer()
         {
@@ -90,7 +90,7 @@ namespace Latios.Transforms
                 var  tickedLocalTransform = hadTicked ? em.GetComponentData<TickedWorldTransform>(entity).worldTransform : localTransform;
                 if (hadTicked && !hadNormal)
                     localTransform = tickedLocalTransform;
-                em.AddChild(command.parent, entity, command.inheritanceFlags);
+                em.AddChild(command.parent, entity, command.inheritanceFlags, command.options);
                 if (em.HasComponent<WorldTransform>(entity))
                     TransformTools.SetLocalTransform(entity, in localTransform, em);
                 if (em.HasComponent<TickedWorldTransform>(entity))
@@ -111,19 +111,19 @@ namespace Latios.Transforms
     {
         public ParentAndLocalTransformCommand(Entity parent,
                                               TransformQvvs newLocalTransform,
-                                              InheritanceFlags inheritanceFlags          = InheritanceFlags.Normal,
-                                              bool transferLinkedEntityGroup = true)
+                                              InheritanceFlags inheritanceFlags = InheritanceFlags.Normal,
+                                              AddChildOptions addChildOptions  = AddChildOptions.AttachLinkedEntityGroup)
         {
-            this.parent                    = parent;
-            this.inheritanceFlags          = inheritanceFlags;
-            this.newLocalTransform         = newLocalTransform;
-            this.transferLinkedEntityGroup = transferLinkedEntityGroup;
+            this.parent            = parent;
+            this.inheritanceFlags  = inheritanceFlags;
+            this.newLocalTransform = newLocalTransform;
+            this.options           = addChildOptions;
         }
 
         public Entity           parent;
         public TransformQvvs    newLocalTransform;
         public InheritanceFlags inheritanceFlags;
-        public bool             transferLinkedEntityGroup;
+        public AddChildOptions  options;
 
         public FunctionPointer<IInstantiateCommand.OnPlayback> GetFunctionPointer()
         {
@@ -145,7 +145,7 @@ namespace Latios.Transforms
                     context.RequestDestroyEntity(entity);
                     continue;
                 }
-                em.AddChild(command.parent, entity, command.inheritanceFlags);
+                em.AddChild(command.parent, entity, command.inheritanceFlags, command.options);
                 if (em.HasComponent<WorldTransform>(entity))
                     TransformTools.SetLocalTransform(entity, command.newLocalTransform, em);
                 if (em.HasComponent<TickedWorldTransform>(entity))
