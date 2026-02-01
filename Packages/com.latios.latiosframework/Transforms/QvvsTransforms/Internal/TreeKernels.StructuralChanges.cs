@@ -11,6 +11,8 @@ namespace Latios.Transforms
         public struct ComponentAddSet
         {
             public Entity entity;
+            public Entity parent;
+            public int    indexInHierarchy;
             public uint   packed;
             public bool rootReference
             {
@@ -72,10 +74,15 @@ namespace Latios.Transforms
                 get => Bits.GetBit(packed, 11);
                 set => Bits.SetBit(ref packed, 11, value);
             }
+            public bool isCopyParent
+            {
+                get => Bits.GetBit(packed, 12);
+                set => Bits.SetBit(ref packed, 12, value);
+            }
             public bool noChange => Bits.GetBits(packed, 0, 6) == 0;
         }
 
-        public static ComponentAddSet GetChildComponentsToAdd(EntityManager em, Entity child, TreeClassification.TreeRole role)
+        public static ComponentAddSet GetChildComponentsToAdd(EntityManager em, Entity child, TreeClassification.TreeRole role, InheritanceFlags flags)
         {
             ComponentAddSet addSet = default;
             addSet.entity          = child;
@@ -180,7 +187,11 @@ namespace Latios.Transforms
                         allTransformsPresent = true;
                         break;
                     }
-                    resultBuffer[resultCount] = newAddSet;
+                    if (hierarchy[index].m_flags.HasCopyParent())
+                        newAddSet.isCopyParent = true;
+                    newAddSet.indexInHierarchy = index;
+                    newAddSet.parent           = hierarchy[hierarchy[index].parentIndex].entity;
+                    resultBuffer[resultCount]  = newAddSet;
                     resultCount++;
                 }
             }
@@ -215,19 +226,44 @@ namespace Latios.Transforms
                 em.SetComponentData(addSet.entity, em.GetComponentData<TickedWorldTransform>(addSet.entity).ToUnticked());
             else
             {
-                if (addSet.setNormalToIdentity)
-                    em.SetComponentData(addSet.entity, new WorldTransform { worldTransform = TransformQvvs.identity });
-                if (addSet.setTickedToIdentity)
-                    em.SetComponentData(addSet.entity, new TickedWorldTransform { worldTransform = TransformQvvs.identity });
+                if (addSet.parent != Entity.Null)
+                {
+                    if (addSet.setNormalToIdentity)
+                    {
+                        var parentTransform = em.GetComponentData<WorldTransform>(addSet.parent);
+                        if (!addSet.isCopyParent)
+                            parentTransform.worldTransform.stretch = new float3(1f, 1f, 1f);
+                        em.SetComponentData(addSet.entity, parentTransform);
+                    }
+                    if (addSet.setTickedToIdentity)
+                    {
+                        var parentTransform = em.GetComponentData<TickedWorldTransform>(addSet.parent);
+                        if (!addSet.isCopyParent)
+                            parentTransform.worldTransform.stretch = new float3(1f, 1f, 1f);
+                        em.SetComponentData(addSet.entity, parentTransform);
+                    }
+                }
+                else
+                {
+                    if (addSet.setNormalToIdentity)
+                        em.SetComponentData(addSet.entity, new WorldTransform { worldTransform = TransformQvvs.identity });
+                    if (addSet.setTickedToIdentity)
+                        em.SetComponentData(addSet.entity, new TickedWorldTransform { worldTransform = TransformQvvs.identity });
+                }
             }
+
             if (addSet.linkedEntityGroup)
                 em.GetBuffer<LinkedEntityGroup>(addSet.entity).Add(new LinkedEntityGroup { Value = addSet.entity });
         }
 
         public static void AddComponents(EntityManager em, Span<ComponentAddSet> addSets)
         {
-            foreach (var set in addSets)
+            // Iterate backwards because we want to propagate newly added transforms if they are identity.
+            for (int i = addSets.Length - 1; i >= 0; i--)
+            {
+                var set = addSets[i];
                 AddComponents(em, set);
+            }
         }
 
         public static void RemoveRootComponents(EntityManager em, Entity entity, bool removeLeg)

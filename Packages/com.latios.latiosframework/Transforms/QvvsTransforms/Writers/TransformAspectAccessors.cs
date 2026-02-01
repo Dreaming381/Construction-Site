@@ -84,28 +84,33 @@ namespace Latios.Transforms
         /* Construct Snippet
            new TransformAspectRootHandle(SystemAPI.GetComponentLookup<WorldTransform>(false),
                                       SystemAPI.GetBufferTypeHandle<EntityInHierarchy>(true),
+                                      SystemAPI.GetBufferTypeHandle<EntityInHierarchyCleanup>(true),
                                       SystemAPI.GetEntityStorageInfoLookup())
          */
 
         struct ThreadCache
         {
-            public ComponentTypeHandle<WorldTransform> transformHandle;
-            public NativeArray<WorldTransform>         chunkTransforms;
-            public BufferAccessor<EntityInHierarchy>   entityInHierarchyAccessor;
+            public ComponentTypeHandle<WorldTransform>      transformHandle;
+            public NativeArray<WorldTransform>              chunkTransforms;
+            public BufferAccessor<EntityInHierarchy>        entityInHierarchyAccessor;
+            public BufferAccessor<EntityInHierarchyCleanup> entityInHierarchyCleanupAccessor;
         }
 
-        TransformsComponentLookup<WorldTransform>        transformLookup;
-        [ReadOnly] BufferTypeHandle<EntityInHierarchy>   hierarchyHandle;
-        [ReadOnly] EntityStorageInfoLookup               esil;
-        [NativeDisableUnsafePtrRestriction] ThreadCache* cache;
-        HasChecker<RootReference>                        rootRefChecker;
+        TransformsComponentLookup<WorldTransform>             transformLookup;
+        [ReadOnly] BufferTypeHandle<EntityInHierarchy>        hierarchyHandle;
+        [ReadOnly] BufferTypeHandle<EntityInHierarchyCleanup> cleanupHandle;
+        [ReadOnly] EntityStorageInfoLookup                    esil;
+        [NativeDisableUnsafePtrRestriction] ThreadCache*      cache;
+        HasChecker<RootReference>                             rootRefChecker;
 
-        public TransformAspectRootHandle(ComponentLookup<WorldTransform>     worldTransformLookupRW,
-                                         BufferTypeHandle<EntityInHierarchy> entityInHierarchyHandleRO,
+        public TransformAspectRootHandle(ComponentLookup<WorldTransform>            worldTransformLookupRW,
+                                         BufferTypeHandle<EntityInHierarchy>        entityInHierarchyHandleRO,
+                                         BufferTypeHandle<EntityInHierarchyCleanup> entityInHierarchyCleanupHandleRO,
                                          EntityStorageInfoLookup entityStorageInfoLookup)
         {
             transformLookup = worldTransformLookupRW;
             hierarchyHandle = entityInHierarchyHandleRO;
+            cleanupHandle   = entityInHierarchyCleanupHandleRO;
             esil            = entityStorageInfoLookup;
             cache           = null;
             rootRefChecker  = default;
@@ -119,8 +124,9 @@ namespace Latios.Transforms
                 cache                  = AllocatorManager.Allocate<ThreadCache>(Allocator.Temp);
                 cache->transformHandle = transformLookup.lookup.ToHandle(false);
             }
-            cache->chunkTransforms           = chunk.GetNativeArray(ref cache->transformHandle);
-            cache->entityInHierarchyAccessor = chunk.GetBufferAccessorRO(ref hierarchyHandle);
+            cache->chunkTransforms                  = chunk.GetNativeArray(ref cache->transformHandle);
+            cache->entityInHierarchyAccessor        = chunk.GetBufferAccessorRO(ref hierarchyHandle);
+            cache->entityInHierarchyCleanupAccessor = chunk.GetBufferAccessorRO(ref cleanupHandle);
         }
 
         public TransformAspect this[int indexInChunk]
@@ -139,10 +145,17 @@ namespace Latios.Transforms
                 }
                 else
                 {
+                    var extra  = cache->entityInHierarchyCleanupAccessor.Length > 0 ? cache->entityInHierarchyCleanupAccessor[indexInChunk].GetUnsafeReadOnlyPtr() : null;
+                    var handle = new EntityInHierarchyHandle
+                    {
+                        m_hierarchy      = cache->entityInHierarchyAccessor[indexInChunk].AsNativeArray(),
+                        m_extraHierarchy = (EntityInHierarchy*)extra,
+                        m_index          = 0
+                    };
                     return new TransformAspect
                     {
                         m_worldTransform = transform,
-                        m_handle         = cache->entityInHierarchyAccessor[indexInChunk].GetRootHandle(),
+                        m_handle         = handle,
                         m_esil           = esil,
                         m_accessType     = TransformAspect.AccessType.ComponentLookup,
                         m_access         = UnsafeUtility.AddressOf(ref transformLookup)

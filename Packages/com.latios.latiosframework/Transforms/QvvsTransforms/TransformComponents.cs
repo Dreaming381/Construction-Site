@@ -140,6 +140,10 @@ namespace Latios.Transforms
         internal int                       m_firstChildIndex;
         internal int                       m_childCount;
         internal InheritanceFlags          m_flags;
+        internal float3                    m_localPosition;
+        internal float                     m_localScale;
+        internal float3                    m_tickedLocalPosition;
+        internal float                     m_tickedLocalScale;
 
         [CreateProperty] public Entity entity => m_descendantEntity;
         [CreateProperty] public int parentIndex => m_parentIndex;

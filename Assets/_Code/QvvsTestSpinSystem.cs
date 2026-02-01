@@ -1,6 +1,7 @@
 using Latios;
 using Latios.Transforms;
 using Unity.Burst;
+using Unity.Burst.Intrinsics;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Jobs;
@@ -16,26 +17,37 @@ public partial struct QvvsTestSpinSystem : ISystem
     {
         new Job
         {
-            transformLookup = GetComponentLookup<WorldTransform>(),
-            esil            = GetEntityStorageInfoLookup(),
-            dt              = Time.DeltaTime,
+            transformAspectHandle = new TransformAspectRootHandle(SystemAPI.GetComponentLookup<WorldTransform>(false),
+                                                                  SystemAPI.GetBufferTypeHandle<EntityInHierarchy>(true),
+                                                                  SystemAPI.GetBufferTypeHandle<EntityInHierarchyCleanup>(true),
+                                                                  SystemAPI.GetEntityStorageInfoLookup()),
+            dt = Time.DeltaTime,
         }.ScheduleParallel();
     }
 
+    [WithAll(typeof(WorldTransform), typeof(EntityInHierarchy))]
     [BurstCompile]
-    partial struct Job : IJobEntity
+    partial struct Job : IJobEntity, IJobEntityChunkBeginEnd
     {
-        public TransformsComponentLookup<WorldTransform> transformLookup;
-        public EntityStorageInfoLookup                   esil;
+        public TransformAspectRootHandle transformAspectHandle;
 
         public float dt;
 
-        public void Execute(Entity entity, in DynamicBuffer<EntityInHierarchy> hierarchyBuffer, in Spinner spinner)
+        public void Execute([EntityIndexInChunk] int indexInChunk, in Spinner spinner)
         {
-            var key      = TransformsKey.CreateFromExclusivelyAccessedRoot(entity, esil);
-            var rotation = quaternion.AxisAngle(math.up(), dt * spinner.spinSpeed);
-            var root     = hierarchyBuffer.GetRootHandle();
-            TransformTools.RotateWorld(root, rotation, key, ref transformLookup, ref esil);
+            var transform = transformAspectHandle[indexInChunk];
+            var rotation  = quaternion.AxisAngle(math.up(), dt * spinner.spinSpeed);
+            transform.RotateWorld(rotation);
+        }
+
+        public bool OnChunkBegin(in ArchetypeChunk chunk, int unfilteredChunkIndex, bool useEnabledMask, in v128 chunkEnabledMask)
+        {
+            transformAspectHandle.SetupChunk(in chunk);
+            return true;
+        }
+
+        public void OnChunkEnd(in ArchetypeChunk chunk, int unfilteredChunkIndex, bool useEnabledMask, in v128 chunkEnabledMask, bool chunkWasExecuted)
+        {
         }
     }
 }

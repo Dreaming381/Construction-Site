@@ -41,11 +41,15 @@ namespace Latios.Transforms
             //descendantsToMove.Add((child, -1));
             extractionList.Add(new EntityInHierarchy
             {
-                m_descendantEntity = hierarchy[subtreeRootIndex].entity,
-                m_parentIndex      = -1,
-                m_childCount       = hierarchy[subtreeRootIndex].childCount,
-                m_firstChildIndex  = 1,
-                m_flags            = default
+                m_descendantEntity    = hierarchy[subtreeRootIndex].entity,
+                m_parentIndex         = -1,
+                m_childCount          = hierarchy[subtreeRootIndex].childCount,
+                m_firstChildIndex     = 1,
+                m_flags               = default,
+                m_localPosition       = default,
+                m_localScale          = 1f,
+                m_tickedLocalPosition = default,
+                m_tickedLocalScale    = 1f,
             });
             // The root is the first level. For each subsequent level, we iterate the entities added during the previous level.
             // And then we add their children.
@@ -119,11 +123,15 @@ namespace Latios.Transforms
         {
             hierarchy.Add(new EntityInHierarchy
             {
-                m_childCount       = 1,
-                m_descendantEntity = parent,
-                m_firstChildIndex  = 1,
-                m_flags            = InheritanceFlags.Normal,
-                m_parentIndex      = -1
+                m_childCount          = 1,
+                m_descendantEntity    = parent,
+                m_firstChildIndex     = 1,
+                m_flags               = InheritanceFlags.Normal,
+                m_parentIndex         = -1,
+                m_localPosition       = default,
+                m_localScale          = 1f,
+                m_tickedLocalPosition = default,
+                m_tickedLocalScale    = 1f,
             });
             hierarchy.Add(new EntityInHierarchy
             {
@@ -131,7 +139,7 @@ namespace Latios.Transforms
                 m_descendantEntity = child,
                 m_firstChildIndex  = 2,
                 m_flags            = flags,
-                m_parentIndex      = 0
+                m_parentIndex      = 0,
             });
         }
 
@@ -189,11 +197,15 @@ namespace Latios.Transforms
             hierarchy.EnsureCapacity(descendants.Length + 1);
             hierarchy.Add(new EntityInHierarchy
             {
-                m_childCount       = 1,
-                m_descendantEntity = parent,
-                m_firstChildIndex  = 1,
-                m_flags            = InheritanceFlags.Normal,
-                m_parentIndex      = -1
+                m_childCount          = 1,
+                m_descendantEntity    = parent,
+                m_firstChildIndex     = 1,
+                m_flags               = InheritanceFlags.Normal,
+                m_parentIndex         = -1,
+                m_localPosition       = default,
+                m_localScale          = 1f,
+                m_tickedLocalPosition = default,
+                m_tickedLocalScale    = 1f,
             });
             for (int i = 0; i < descendants.Length; i++)
             {
@@ -386,115 +398,6 @@ namespace Latios.Transforms
 
             tsa.Dispose();
         }
-
-        public static void RemoveDeadDescendantsFromHierarchy(ref ThreadStackAllocator parentTsa, ref DynamicBuffer<EntityInHierarchy> hierarchy, EntityManager em)
-        {
-            var srcScan   = hierarchy.AsNativeArray().AsSpan();
-            int deadCount = CountAndMarkDeadDescendantsInHierarchy(srcScan, em);
-            if (deadCount == 0)
-                return;
-
-            hierarchy.Length = RemoveMarkedDescendantsInHierarchy(ref parentTsa, srcScan, deadCount);
-        }
-
-        public static void RemoveDeadDescendantsFromHierarchy(ref ThreadStackAllocator parentTsa, ref DynamicBuffer<EntityInHierarchy> hierarchy, EntityStorageInfoLookup esil)
-        {
-            var srcScan   = hierarchy.AsNativeArray().AsSpan();
-            int deadCount = CountAndMarkDeadDescendantsInHierarchy(srcScan, esil);
-            if (deadCount == 0)
-                return;
-
-            hierarchy.Length = RemoveMarkedDescendantsInHierarchy(ref parentTsa,
-                                                                  srcScan,
-                                                                  deadCount);
-        }
-
-        static int CountAndMarkDeadDescendantsInHierarchy(Span<EntityInHierarchy> hierarchy, EntityManager em)
-        {
-            int deadCount = 0;
-            for (int i = 1; i < hierarchy.Length; i++)
-            {
-                if (!em.IsAlive(hierarchy[i].entity))
-                {
-                    hierarchy[i].m_firstChildIndex = int.MaxValue;
-                    deadCount++;
-                }
-            }
-            return deadCount;
-        }
-
-        static int CountAndMarkDeadDescendantsInHierarchy(Span<EntityInHierarchy> hierarchy, EntityStorageInfoLookup esil)
-        {
-            int deadCount = 0;
-            for (int i = 1; i < hierarchy.Length; i++)
-            {
-                if (!esil.IsAlive(hierarchy[i].entity))
-                {
-                    hierarchy[i].m_firstChildIndex = int.MaxValue;
-                    deadCount++;
-                }
-            }
-            return deadCount;
-        }
-
-        static int RemoveMarkedDescendantsInHierarchy(ref ThreadStackAllocator parentTsa, Span<EntityInHierarchy> hierarchy, int deadCount)
-        {
-            for (int i = 2; i < hierarchy.Length; i++)
-            {
-                ref var element = ref hierarchy[i];
-                while (hierarchy[element.parentIndex].m_firstChildIndex == int.MaxValue)
-                    element.m_parentIndex = hierarchy[element.parentIndex].parentIndex;
-            }
-            for (int i = 1; i < hierarchy.Length; i++)
-            {
-                ref var element = ref hierarchy[i];
-                if (element.m_firstChildIndex == int.MaxValue)
-                    element.m_parentIndex = int.MaxValue;
-            }
-
-            var tsa        = parentTsa.CreateChildAllocator();
-            var selectFrom = CopyHierarchy(ref tsa, hierarchy);
-            var srcToDst   = tsa.AllocateAsSpan<int>(selectFrom.Length);
-            var dstBuffer  = hierarchy.Slice(0, selectFrom.Length - deadCount);
-
-            dstBuffer[0].m_childCount = 0;
-            srcToDst.Fill(int.MaxValue);
-            srcToDst[0] = 0;
-
-            for (int dst = 1; dst < dstBuffer.Length; dst++)
-            {
-                int bestValue = int.MaxValue;
-                int bestIndex = int.MaxValue;
-                for (int i = 1; i < selectFrom.Length; i++)
-                {
-                    var parentIndex = selectFrom[i].parentIndex;
-                    var val         = parentIndex != int.MaxValue ? srcToDst[selectFrom[i].parentIndex] : int.MaxValue;
-                    if (val < bestValue)
-                    {
-                        bestValue = val;
-                        bestIndex = i;
-                    }
-                }
-                ref var best                  = ref selectFrom[bestIndex];
-                ref var dstElement            = ref dstBuffer[dst];
-                dstElement.m_descendantEntity = best.m_descendantEntity;
-                dstElement.m_flags            = best.m_flags;
-                dstElement.m_parentIndex      = bestValue;
-                dstElement.m_childCount       = 0;
-                srcToDst[bestIndex]           = dst;
-                dstBuffer[bestValue].m_childCount++;
-                best.m_parentIndex = int.MaxValue;
-            }
-
-            int running = 1 + dstBuffer[0].childCount;
-            for (int i = 1; i < dstBuffer.Length; i++)
-            {
-                dstBuffer[i].m_firstChildIndex  = running;
-                running                        += dstBuffer[i].childCount;
-            }
-            tsa.Dispose();
-            return dstBuffer.Length;
-        }
         #endregion
 
         #region LinkedEntityGroup
@@ -599,33 +502,7 @@ namespace Latios.Transforms
         }
         #endregion
 
-        #region Hierarchy and LEG
-        public static void RemoveDeadDescendantsFromHierarchyAndLeg(ref ThreadStackAllocator parentTsa, ref DynamicBuffer<EntityInHierarchy> hierarchy,
-                                                                    ref DynamicBuffer<LinkedEntityGroup> leg, EntityManager em)
-        {
-            var srcScan   = hierarchy.AsNativeArray().AsSpan();
-            int deadCount = CountAndMarkDeadDescendantsInHierarchy(srcScan, em);
-            if (deadCount == 0)
-                return;
-
-            RemoveMarkedDescendantsFromLeg(ref leg, srcScan);
-            hierarchy.Length = RemoveMarkedDescendantsInHierarchy(ref parentTsa, srcScan, deadCount);
-        }
-
-        public static void RemoveDeadDescendantsFromHierarchyAndLeg(ref ThreadStackAllocator parentTsa, ref DynamicBuffer<EntityInHierarchy> hierarchy,
-                                                                    ref DynamicBuffer<LinkedEntityGroup> leg, EntityStorageInfoLookup esil)
-        {
-            var srcScan   = hierarchy.AsNativeArray().AsSpan();
-            int deadCount = CountAndMarkDeadDescendantsInHierarchy(srcScan, esil);
-            if (deadCount == 0)
-                return;
-
-            RemoveMarkedDescendantsFromLeg(ref leg, srcScan);
-            hierarchy.Length = RemoveMarkedDescendantsInHierarchy(ref parentTsa, srcScan, deadCount);
-        }
-        #endregion
-
-        #region Root Reference
+        #region Root Reference and Local
         public static void UpdateRootReferencesFromDiff(ReadOnlySpan<EntityInHierarchy> hierarchy, ReadOnlySpan<Entity> oldEntities, EntityManager em)
         {
             var root = hierarchy[0].entity;
@@ -645,6 +522,43 @@ namespace Latios.Transforms
             {
                 if (i >= oldEntities.Length || hierarchy[i].entity != oldEntities[i])
                     rootReferenceLookupRW[hierarchy[i].entity] = new RootReference { m_rootEntity = root, m_indexInHierarchy = i };
+            }
+        }
+
+        public static void UpdateLocalTransformsOfNewAncestorComponents(ReadOnlySpan<ComponentAddSet> addSets, Span<EntityInHierarchy> hierarchy)
+        {
+            foreach (var addSet in addSets)
+            {
+                if (addSet.parent == Entity.Null || addSet.noChange)
+                    continue;
+
+                if (!addSet.worldTransform && !addSet.tickedWorldTransform)
+                    continue;
+
+                ref var element = ref hierarchy[addSet.indexInHierarchy];
+                if (addSet.copyNormalToTicked)
+                {
+                    element.m_tickedLocalPosition = element.m_localPosition;
+                    element.m_tickedLocalScale    = element.m_localScale;
+                }
+                else if (addSet.copyTickedToNormal)
+                {
+                    element.m_localPosition = element.m_tickedLocalPosition;
+                    element.m_localScale    = element.m_tickedLocalScale;
+                }
+                else
+                {
+                    if (addSet.setNormalToIdentity)
+                    {
+                        element.m_localPosition = default;
+                        element.m_localScale    = 1f;
+                    }
+                    else if (addSet.setTickedToIdentity)
+                    {
+                        element.m_tickedLocalPosition = default;
+                        element.m_tickedLocalScale    = 1f;
+                    }
+                }
             }
         }
         #endregion

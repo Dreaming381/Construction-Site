@@ -87,29 +87,42 @@ namespace Latios.Transforms
                     break;
             }
 
+            var childHandle = em.GetComponentData<RootReference>(child).ToHandle(em);
             if (flags.HasCopyParent())
             {
                 // Set WorldTransform of child and propagate.
-                var                          rootReference = em.GetComponentData<RootReference>(child);
-                Span<Propagate.WriteCommand> command       = stackalloc Propagate.WriteCommand[1];
-                command[0]                                 = new Propagate.WriteCommand
+                Span<Propagate.WriteCommand> command = stackalloc Propagate.WriteCommand[1];
+                command[0]                           = new Propagate.WriteCommand
                 {
-                    indexInHierarchy = rootReference.indexInHierarchy,
+                    indexInHierarchy = childHandle.indexInHierarchy,
                     writeType        = Propagate.WriteCommand.WriteType.CopyParentParentChanged
                 };
-                Span<TransformQvvs> dummy  = stackalloc TransformQvvs[1];
-                var                 handle = rootReference.ToHandle(em);
+                Span<TransformQvvs> dummy = stackalloc TransformQvvs[1];
                 em.CompleteDependencyBeforeRW<WorldTransform>();
                 var transformLookup = em.GetComponentLookup<WorldTransform>(false);
                 if (em.HasComponent<WorldTransform>(child))
                 {
                     var ema = new EntityManagerAccess(em);
-                    Propagate.WriteAndPropagate(handle.m_hierarchy, dummy, command, ref ema, ref ema);
+                    Propagate.WriteAndPropagate(childHandle.m_hierarchy, childHandle.m_extraHierarchy, dummy, command, ref ema, ref ema);
                 }
                 if (em.HasComponent<TickedWorldTransform>(child))
                 {
                     var ema = new TickedEntityManagerAccess(em);
-                    Propagate.WriteAndPropagate(handle.m_hierarchy, dummy, command, ref ema, ref ema);
+                    Propagate.WriteAndPropagate(childHandle.m_hierarchy, childHandle.m_extraHierarchy, dummy, command, ref ema, ref ema);
+                }
+            }
+            else
+            {
+                // Compute new local transforms (and propagate if necessary)
+                if (em.HasComponent<WorldTransform>(child))
+                {
+                    var childTransform = em.GetComponentData<WorldTransform>(child);
+                    SetWorldTransform(child, in childTransform.worldTransform, em);
+                }
+                if (em.HasComponent<TickedWorldTransform>(child))
+                {
+                    var childTransform = em.GetComponentData<TickedWorldTransform>(child);
+                    SetTickedWorldTransform(child, in childTransform.worldTransform, em);
                 }
             }
         }
@@ -140,7 +153,7 @@ namespace Latios.Transforms
         static void AddSoloChildToSoloParent(EntityManager em, Entity parent, Entity child, InheritanceFlags flags, AddChildOptions options)
         {
             // For this case, we know upfront whether we need LEG or Cleanup. Apply structural changes immediately.
-            var childAddSet  = TreeKernels.GetChildComponentsToAdd(em, child, TreeKernels.TreeClassification.TreeRole.Solo);
+            var childAddSet  = TreeKernels.GetChildComponentsToAdd(em, child, TreeKernels.TreeClassification.TreeRole.Solo, flags);
             var parentAddSet = TreeKernels.GetParentComponentsToAdd(em, parent, TreeKernels.TreeClassification.TreeRole.Solo, childAddSet, options);
             TreeKernels.AddComponents(em, childAddSet);
             TreeKernels.AddComponents(em, parentAddSet);
@@ -176,7 +189,7 @@ namespace Latios.Transforms
             var tsa = ThreadStackAllocator.GetAllocator();
 
             // For this case, we know upfront whether we need LEG or Cleanup. Apply structural changes immediately.
-            var childAddSet  = TreeKernels.GetChildComponentsToAdd(em, child, TreeKernels.TreeClassification.TreeRole.Solo);
+            var childAddSet  = TreeKernels.GetChildComponentsToAdd(em, child, TreeKernels.TreeClassification.TreeRole.Solo, flags);
             var parentAddSet = TreeKernels.GetParentComponentsToAdd(em, parent, TreeKernels.TreeClassification.TreeRole.Root, childAddSet, options);
             TreeKernels.AddComponents(em, childAddSet);
             TreeKernels.AddComponents(em, parentAddSet);
@@ -223,7 +236,7 @@ namespace Latios.Transforms
             var tsa = ThreadStackAllocator.GetAllocator();
 
             // For this case, we know upfront whether we need LEG or Cleanup. Apply structural changes immediately.
-            var childAddSet     = TreeKernels.GetChildComponentsToAdd(em, child, TreeKernels.TreeClassification.TreeRole.Solo);
+            var childAddSet     = TreeKernels.GetChildComponentsToAdd(em, child, TreeKernels.TreeClassification.TreeRole.Solo, flags);
             var root            = parentClassification.root;
             var hierarchy       = GetRootHierarchy(em, parentClassification, true);
             var ancestryAddSets = TreeKernels.GetAncestorComponentsToAdd(ref tsa, em, hierarchy.AsNativeArray(), parentClassification, childAddSet, options);
@@ -234,6 +247,7 @@ namespace Latios.Transforms
             // We insert the new entity into the hierarchy before cleaning, because otherwise we lose where the parent it.
             hierarchy = GetRootHierarchy(em, parentClassification, false);
             var old   = TreeKernels.CopyHierarchyEntities(ref tsa, hierarchy.AsNativeArray());
+            TreeKernels.UpdateLocalTransformsOfNewAncestorComponents(ancestryAddSets, hierarchy.AsNativeArray());
             TreeKernels.InsertSoloEntityIntoHierarchy(ref hierarchy, parentClassification.indexInHierarchy, child, flags);
             CleanHierarchy(ref tsa, em, parentClassification.root, ref hierarchy, !rootAddSet.linkedEntityGroup, out var removeRootLeg);
             if (rootAddSet.entityInHierarchyCleanup || (parentClassification.isRootAlive && em.HasBuffer<EntityInHierarchyCleanup>(root)))
@@ -270,7 +284,7 @@ namespace Latios.Transforms
             var tsa = ThreadStackAllocator.GetAllocator();
 
             // Get the components to add, but don't add them yet, because we don't yet know if the parent will need cleanup.
-            var childAddSet  = TreeKernels.GetChildComponentsToAdd(em, child, TreeKernels.TreeClassification.TreeRole.Root);
+            var childAddSet  = TreeKernels.GetChildComponentsToAdd(em, child, TreeKernels.TreeClassification.TreeRole.Root, flags);
             var parentAddSet = TreeKernels.GetParentComponentsToAdd(em, parent, TreeKernels.TreeClassification.TreeRole.Solo, childAddSet, options);
 
             // Clean child hierarchy
@@ -321,7 +335,7 @@ namespace Latios.Transforms
             var tsa = ThreadStackAllocator.GetAllocator();
 
             // Get the components, but only apply to the child so that it has root reference. We don't yet know if the parent needs cleanup.
-            var childAddSet  = TreeKernels.GetChildComponentsToAdd(em, child, TreeKernels.TreeClassification.TreeRole.Root);
+            var childAddSet  = TreeKernels.GetChildComponentsToAdd(em, child, TreeKernels.TreeClassification.TreeRole.Root, flags);
             var parentAddSet = TreeKernels.GetParentComponentsToAdd(em, parent, TreeKernels.TreeClassification.TreeRole.Root, childAddSet, options);
             TreeKernels.AddComponents(em, childAddSet);
 
@@ -378,7 +392,7 @@ namespace Latios.Transforms
             var tsa = ThreadStackAllocator.GetAllocator();
 
             // Get the components to add, but only apply them to the child, since we don't know yet if the parent's root needs cleanup.
-            var     childAddSet     = TreeKernels.GetChildComponentsToAdd(em, child, TreeKernels.TreeClassification.TreeRole.Root);
+            var     childAddSet     = TreeKernels.GetChildComponentsToAdd(em, child, TreeKernels.TreeClassification.TreeRole.Root, flags);
             var     root            = parentClassification.root;
             var     hierarchy       = GetRootHierarchy(em, parentClassification, true);
             var     ancestryAddSets = TreeKernels.GetAncestorComponentsToAdd(ref tsa, em, hierarchy.AsNativeArray(), parentClassification, childAddSet, options);
@@ -390,6 +404,7 @@ namespace Latios.Transforms
             hierarchy             = GetRootHierarchy(em, parentClassification, false);
             var oldChildHierarchy = em.GetBuffer<EntityInHierarchy>(child);
             CleanHierarchy(ref tsa, em, child, ref oldChildHierarchy, true, out var removeChildLeg);
+            TreeKernels.UpdateLocalTransformsOfNewAncestorComponents(ancestryAddSets, hierarchy.AsNativeArray());
             var old = TreeKernels.CopyHierarchyEntities(ref tsa, hierarchy.AsNativeArray());
             TreeKernels.InsertSubtreeIntoHierarchy(ref hierarchy, parentClassification.indexInHierarchy, oldChildHierarchy.AsNativeArray().AsReadOnlySpan(), flags);
             CleanHierarchy(ref tsa, em, root, ref hierarchy, !rootAddSet.linkedEntityGroup, out var removeRootLeg);
@@ -444,7 +459,7 @@ namespace Latios.Transforms
 
             // We are only moving one entity, so we know the components to add up front.
             var oldRoot      = childClassification.root;
-            var childAddSet  = TreeKernels.GetChildComponentsToAdd(em, child, TreeKernels.TreeClassification.TreeRole.InternalNoChildren);
+            var childAddSet  = TreeKernels.GetChildComponentsToAdd(em, child, TreeKernels.TreeClassification.TreeRole.InternalNoChildren, flags);
             var parentAddSet = TreeKernels.GetParentComponentsToAdd(em, parent, TreeKernels.TreeClassification.TreeRole.Solo, childAddSet, options);
             TreeKernels.AddComponents(em, childAddSet);
             TreeKernels.AddComponents(em, parentAddSet);
@@ -534,7 +549,7 @@ namespace Latios.Transforms
 
             // We are only moving one entity, so we know the components to add up front.
             var oldRoot      = childClassification.root;
-            var childAddSet  = TreeKernels.GetChildComponentsToAdd(em, child, TreeKernels.TreeClassification.TreeRole.InternalNoChildren);
+            var childAddSet  = TreeKernels.GetChildComponentsToAdd(em, child, TreeKernels.TreeClassification.TreeRole.InternalNoChildren, flags);
             var parentAddSet = TreeKernels.GetParentComponentsToAdd(em, parent, TreeKernels.TreeClassification.TreeRole.Root, childAddSet, options);
             TreeKernels.AddComponents(em, childAddSet);
             TreeKernels.AddComponents(em, parentAddSet);
@@ -597,13 +612,14 @@ namespace Latios.Transforms
             var tsa = ThreadStackAllocator.GetAllocator();
 
             // We still need to account for ticked vs unticked in the ancestry
-            var childAddSet     = TreeKernels.GetChildComponentsToAdd(em, child, TreeKernels.TreeClassification.TreeRole.InternalNoChildren);
+            var childAddSet     = TreeKernels.GetChildComponentsToAdd(em, child, TreeKernels.TreeClassification.TreeRole.InternalNoChildren, flags);
             var hierarchy       = GetRootHierarchy(em, parentClassification, false);
             var ancestryAddSets = TreeKernels.GetAncestorComponentsToAdd(ref tsa, em, hierarchy.AsNativeArray(), parentClassification, childAddSet, default);
             TreeKernels.AddComponents(em, ancestryAddSets);
 
             hierarchy = GetRootHierarchy(em, parentClassification, false);
-            var old   = TreeKernels.CopyHierarchyEntities(ref tsa, hierarchy.AsNativeArray());
+            TreeKernels.UpdateLocalTransformsOfNewAncestorComponents(ancestryAddSets, hierarchy.AsNativeArray());
+            var old = TreeKernels.CopyHierarchyEntities(ref tsa, hierarchy.AsNativeArray());
             TreeKernels.RemoveSoloFromHierarchy(ref hierarchy, childClassification.indexInHierarchy);
             // When we remove from the hierarchy, our parent's index might have shifted by an index if the child preceeded the parent
             if (parentClassification.indexInHierarchy >= hierarchy.Length || hierarchy[parentClassification.indexInHierarchy].entity != parent)
@@ -639,7 +655,7 @@ namespace Latios.Transforms
             // We are only moving one entity, so we know the components to add up front.
             var oldRoot         = childClassification.root;
             var root            = parentClassification.root;
-            var childAddSet     = TreeKernels.GetChildComponentsToAdd(em, child, TreeKernels.TreeClassification.TreeRole.InternalNoChildren);
+            var childAddSet     = TreeKernels.GetChildComponentsToAdd(em, child, TreeKernels.TreeClassification.TreeRole.InternalNoChildren, flags);
             var hierarchy       = GetRootHierarchy(em, parentClassification, false);
             var ancestryAddSets = TreeKernels.GetAncestorComponentsToAdd(ref tsa, em, hierarchy.AsNativeArray(), parentClassification, childAddSet, options);
             var rootAddSet      = ancestryAddSets[ancestryAddSets.Length - 1];
@@ -658,7 +674,8 @@ namespace Latios.Transforms
 
             // And then we insert the child into the new hierarchy. We do this before cleaning while we know the index of the parent.
             hierarchy = GetRootHierarchy(em, parentClassification, false);
-            var old   = TreeKernels.CopyHierarchyEntities(ref tsa, hierarchy.AsNativeArray());
+            TreeKernels.UpdateLocalTransformsOfNewAncestorComponents(ancestryAddSets, hierarchy.AsNativeArray());
+            var old = TreeKernels.CopyHierarchyEntities(ref tsa, hierarchy.AsNativeArray());
             TreeKernels.InsertSoloEntityIntoHierarchy(ref hierarchy, parentClassification.indexInHierarchy, child, flags);
             CleanHierarchy(ref tsa, em, root, ref hierarchy, !rootAddSet.linkedEntityGroup, out var removeRootLeg);
             if (rootAddSet.entityInHierarchyCleanup || em.HasBuffer<EntityInHierarchyCleanup>(parent))
@@ -707,7 +724,7 @@ namespace Latios.Transforms
 
             // Add only the components for the child. We don't yet know if the new root needs cleanup or not.
             var oldRoot      = childClassification.root;
-            var childAddSet  = TreeKernels.GetChildComponentsToAdd(em, child, TreeKernels.TreeClassification.TreeRole.InternalNoChildren);
+            var childAddSet  = TreeKernels.GetChildComponentsToAdd(em, child, TreeKernels.TreeClassification.TreeRole.InternalNoChildren, flags);
             var parentAddSet = TreeKernels.GetParentComponentsToAdd(em, parent, TreeKernels.TreeClassification.TreeRole.Solo, childAddSet, options);
             TreeKernels.AddComponents(em, childAddSet);
 
@@ -819,7 +836,7 @@ namespace Latios.Transforms
 
             // Add only the components for the child. We don't yet know if the new root needs cleanup or not.
             var oldRoot      = childClassification.root;
-            var childAddSet  = TreeKernels.GetChildComponentsToAdd(em, child, TreeKernels.TreeClassification.TreeRole.InternalNoChildren);
+            var childAddSet  = TreeKernels.GetChildComponentsToAdd(em, child, TreeKernels.TreeClassification.TreeRole.InternalNoChildren, flags);
             var parentAddSet = TreeKernels.GetParentComponentsToAdd(em, parent, TreeKernels.TreeClassification.TreeRole.Solo, childAddSet, options);
             TreeKernels.AddComponents(em, childAddSet);
 
@@ -903,12 +920,13 @@ namespace Latios.Transforms
             var tsa = ThreadStackAllocator.GetAllocator();
 
             // We still need to account for ticked vs unticked in the ancestry
-            var childAddSet     = TreeKernels.GetChildComponentsToAdd(em, child, TreeKernels.TreeClassification.TreeRole.InternalNoChildren);
+            var childAddSet     = TreeKernels.GetChildComponentsToAdd(em, child, TreeKernels.TreeClassification.TreeRole.InternalNoChildren, flags);
             var hierarchy       = GetRootHierarchy(em, parentClassification, false);
             var ancestryAddSets = TreeKernels.GetAncestorComponentsToAdd(ref tsa, em, hierarchy.AsNativeArray(), parentClassification, childAddSet, default);
             TreeKernels.AddComponents(em, ancestryAddSets);
 
-            hierarchy   = GetRootHierarchy(em, parentClassification, false);
+            hierarchy = GetRootHierarchy(em, parentClassification, false);
+            TreeKernels.UpdateLocalTransformsOfNewAncestorComponents(ancestryAddSets, hierarchy.AsNativeArray());
             var old     = TreeKernels.CopyHierarchyEntities(ref tsa, hierarchy.AsNativeArray());
             var subtree = TreeKernels.ExtractSubtree(ref tsa, hierarchy.AsNativeArray(), childClassification.indexInHierarchy);
             TreeKernels.RemoveSubtreeFromHierarchy(ref tsa, ref hierarchy, childClassification.indexInHierarchy, subtree);
@@ -945,7 +963,7 @@ namespace Latios.Transforms
             // Add only the components for the child. We don't yet know if the new root needs cleanup or not.
             var     oldRoot         = childClassification.root;
             var     root            = parentClassification.root;
-            var     childAddSet     = TreeKernels.GetChildComponentsToAdd(em, child, TreeKernels.TreeClassification.TreeRole.InternalNoChildren);
+            var     childAddSet     = TreeKernels.GetChildComponentsToAdd(em, child, TreeKernels.TreeClassification.TreeRole.InternalNoChildren, flags);
             var     hierarchy       = GetRootHierarchy(em, parentClassification, true);
             var     ancestryAddSets = TreeKernels.GetAncestorComponentsToAdd(ref tsa, em, hierarchy.AsNativeArray(), parentClassification, childAddSet, options);
             ref var rootAddSet      = ref ancestryAddSets[ancestryAddSets.Length - 1];
@@ -984,7 +1002,8 @@ namespace Latios.Transforms
 
             // Build new hierarchy
             hierarchy = GetRootHierarchy(em, parentClassification, false);
-            var old   = TreeKernels.CopyHierarchyEntities(ref tsa, hierarchy.AsNativeArray());
+            TreeKernels.UpdateLocalTransformsOfNewAncestorComponents(ancestryAddSets, hierarchy.AsNativeArray());
+            var old = TreeKernels.CopyHierarchyEntities(ref tsa, hierarchy.AsNativeArray());
             CleanHierarchy(ref tsa, em, root, ref hierarchy, !rootAddSet.linkedEntityGroup, out var removeRootLeg);
             TreeKernels.InsertSubtreeIntoHierarchy(ref hierarchy, parentClassification.indexInHierarchy, subtree, flags);
             if (rootAddSet.entityInHierarchyCleanup)

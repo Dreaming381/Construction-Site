@@ -35,7 +35,7 @@ namespace Latios.Transforms
         IgnoreLinkedEntityGroup
     }
 
-    public static partial class TransformTools
+    public static unsafe partial class TransformTools
     {
         /// <summary>
         /// Assigns a new parent to the entity, updating all hierarchy information between the two entities involved.
