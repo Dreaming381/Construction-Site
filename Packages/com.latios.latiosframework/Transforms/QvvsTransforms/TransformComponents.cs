@@ -149,6 +149,7 @@ namespace Latios.Transforms
         [CreateProperty] public int parentIndex => m_parentIndex;
         [CreateProperty] public int childCount => m_childCount;
         [CreateProperty] public int firstChildIndex => m_firstChildIndex;
+        [CreateProperty] public float4 embeddedLocalHint => new float4(m_localPosition, m_localScale);
     }
 
     /// <summary>

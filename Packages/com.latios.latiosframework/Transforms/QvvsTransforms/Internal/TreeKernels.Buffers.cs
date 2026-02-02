@@ -135,11 +135,15 @@ namespace Latios.Transforms
             });
             hierarchy.Add(new EntityInHierarchy
             {
-                m_childCount       = 0,
-                m_descendantEntity = child,
-                m_firstChildIndex  = 2,
-                m_flags            = flags,
-                m_parentIndex      = 0,
+                m_childCount          = 0,
+                m_descendantEntity    = child,
+                m_firstChildIndex     = 2,
+                m_flags               = flags,
+                m_parentIndex         = 0,
+                m_localPosition       = default,
+                m_localScale          = 1f,
+                m_tickedLocalPosition = default,
+                m_tickedLocalScale    = 1f,
             });
         }
 
@@ -159,11 +163,15 @@ namespace Latios.Transforms
                 }
                 hierarchy.Add(new EntityInHierarchy
                 {
-                    m_childCount       = 0,
-                    m_descendantEntity = soloChild,
-                    m_firstChildIndex  = insertionPoint + 1,
-                    m_flags            = flags,
-                    m_parentIndex      = parentIndex
+                    m_childCount          = 0,
+                    m_descendantEntity    = soloChild,
+                    m_firstChildIndex     = insertionPoint + 1,
+                    m_flags               = flags,
+                    m_parentIndex         = parentIndex,
+                    m_localPosition       = default,
+                    m_localScale          = 1f,
+                    m_tickedLocalPosition = default,
+                    m_tickedLocalScale    = 1f,
                 });
             }
             else
@@ -171,11 +179,15 @@ namespace Latios.Transforms
                 var newFirstChildIndex = hierarchy[insertionPoint].firstChildIndex;
                 hierarchy.Insert(insertionPoint, new EntityInHierarchy
                 {
-                    m_childCount       = 0,
-                    m_descendantEntity = soloChild,
-                    m_firstChildIndex  = newFirstChildIndex,
-                    m_flags            = flags,
-                    m_parentIndex      = parentIndex
+                    m_childCount          = 0,
+                    m_descendantEntity    = soloChild,
+                    m_firstChildIndex     = newFirstChildIndex,
+                    m_flags               = flags,
+                    m_parentIndex         = parentIndex,
+                    m_localPosition       = default,
+                    m_localScale          = 1f,
+                    m_tickedLocalPosition = default,
+                    m_tickedLocalScale    = 1f,
                 });
                 var hierarchyArray = hierarchy.AsNativeArray().AsSpan();
                 for (int i = parentIndex + 1; i < hierarchyArray.Length; i++)
@@ -209,14 +221,10 @@ namespace Latios.Transforms
             });
             for (int i = 0; i < descendants.Length; i++)
             {
-                hierarchy.Add(new EntityInHierarchy
-                {
-                    m_childCount       = descendants[i].childCount,
-                    m_descendantEntity = descendants[i].entity,
-                    m_firstChildIndex  = descendants[i].firstChildIndex + 1,
-                    m_flags            = descendants[i].m_flags,
-                    m_parentIndex      = descendants[i].parentIndex + 1
-                });
+                var newElement = descendants[i];
+                newElement.m_firstChildIndex++;
+                newElement.m_parentIndex++;
+                hierarchy.Add(newElement);
             }
             hierarchy.ElementAt(1).m_flags = flags;
         }

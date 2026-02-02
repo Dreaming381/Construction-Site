@@ -1,4 +1,5 @@
 using Unity.Collections;
+using Unity.Collections.LowLevel.Unsafe;
 using Unity.Entities;
 using Unity.Mathematics;
 using Unity.Transforms;
@@ -436,9 +437,9 @@ namespace Latios.Transforms
                 return (element.m_localPosition, element.m_localScale);
         }
 
-        static void WriteLocal(in EntityInHierarchyHandle handle, bool isTicked, float3 position, float scale)
+        static unsafe void WriteLocal(in EntityInHierarchyHandle handle, bool isTicked, float3 position, float scale)
         {
-            ref var element = ref handle.m_hierarchy.AsSpan()[handle.indexInHierarchy];
+            ref var element = ref ((EntityInHierarchy*)handle.m_hierarchy.GetUnsafeReadOnlyPtr())[handle.indexInHierarchy];
             if (isTicked)
             {
                 element.m_tickedLocalPosition = position;
@@ -449,24 +450,57 @@ namespace Latios.Transforms
                 element.m_localPosition = position;
                 element.m_localScale    = scale;
             }
+
+            if (handle.m_extraHierarchy != null)
+            {
+                ref var extra = ref handle.m_extraHierarchy[handle.indexInHierarchy];
+                if (isTicked)
+                {
+                    extra.m_tickedLocalPosition = position;
+                    extra.m_tickedLocalScale    = scale;
+                }
+                else
+                {
+                    extra.m_localPosition = position;
+                    extra.m_localScale    = scale;
+                }
+            }
         }
 
-        static void WriteLocalPosition(in EntityInHierarchyHandle handle, bool isTicked, float3 position)
+        static unsafe void WriteLocalPosition(in EntityInHierarchyHandle handle, bool isTicked, float3 position)
         {
-            ref var element = ref handle.m_hierarchy.AsSpan()[handle.indexInHierarchy];
+            ref var element = ref ((EntityInHierarchy*)handle.m_hierarchy.GetUnsafeReadOnlyPtr())[handle.indexInHierarchy];
             if (isTicked)
                 element.m_tickedLocalPosition = position;
             else
                 element.m_localPosition = position;
+
+            if (handle.m_extraHierarchy != null)
+            {
+                ref var extra = ref handle.m_extraHierarchy[handle.indexInHierarchy];
+                if (isTicked)
+                    extra.m_tickedLocalPosition = position;
+                else
+                    extra.m_localPosition = position;
+            }
         }
 
-        static void WriteLocalScale(in EntityInHierarchyHandle handle, bool isTicked, float scale)
+        static unsafe void WriteLocalScale(in EntityInHierarchyHandle handle, bool isTicked, float scale)
         {
-            ref var element = ref handle.m_hierarchy.AsSpan()[handle.indexInHierarchy];
+            ref var element = ref ((EntityInHierarchy*)handle.m_hierarchy.GetUnsafeReadOnlyPtr())[handle.indexInHierarchy];
             if (isTicked)
                 element.m_tickedLocalScale = scale;
             else
                 element.m_localScale = scale;
+
+            if (handle.m_extraHierarchy != null)
+            {
+                ref var extra = ref handle.m_extraHierarchy[handle.indexInHierarchy];
+                if (isTicked)
+                    extra.m_tickedLocalScale = scale;
+                else
+                    extra.m_localScale = scale;
+            }
         }
     }
 }
